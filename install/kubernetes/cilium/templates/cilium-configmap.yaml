@@ -476,6 +476,11 @@ data:
   auto-create-cilium-node-resource: "true"
 {{- end }}
 
+{{- if hasKey .Values "tproxy" }}
+  # Enables the transparent proxy for policy enforcement and visibility
+  enable-tproxy: {{ .Values.tproxy | quote }}
+{{- end }}
+
 {{- if hasKey .Values "l7Proxy" }}
   # Enables L7 proxy for L7 policy enforcement and visibility
   enable-l7-proxy: {{ .Values.l7Proxy | quote }}

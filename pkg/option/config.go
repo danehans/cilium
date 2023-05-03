@@ -1635,6 +1635,9 @@ type DaemonConfig struct {
 	// IPv6MCastDevice is the name of device that joins IPv6's solicitation multicast group
 	IPv6MCastDevice string
 
+	// EnableTproxy is the option to enable the transparent userland proxy
+	EnableTproxy bool
+
 	// EnableL7Proxy is the option to enable L7 proxy
 	EnableL7Proxy bool
 

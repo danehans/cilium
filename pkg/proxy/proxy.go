@@ -6,6 +6,8 @@ package proxy
 import (
 	"context"
 	"fmt"
+	"os/exec"
+	"strconv"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -166,6 +168,36 @@ func StartProxySupport(minPort uint16, maxPort uint16, stateDir string,
 		ipcache:                     ipcache,
 		defaultEndpointInfoRegistry: eir,
 	}
+}
+
+// Tproxy defines a transparent proxy, e.g. a userspace proxy that is transparent
+// by preserving the the client/server connection.
+type Tproxy struct {
+    proxyPort uint16
+    cmd       *exec.Cmd
+}
+
+func (t *Tproxy) Start(proxyPort uint16, configPath string) error {
+    t.proxyPort = proxyPort
+    t.cmd = exec.Command("tproxy", "--port", strconv.Itoa(int(proxyPort)), "--config", configPath)
+    
+    err := t.cmd.Start()
+    if err != nil {
+        return fmt.Errorf("failed to start tproxy: %v", err)
+    }
+    
+    return nil
+}
+
+func (t *Tproxy) Stop() error {
+    if p.cmd != nil && t.cmd.Process != nil {
+        err := t.cmd.Process.Kill()
+        if err != nil {
+            return fmt.Errorf("failed to stop tproxy: %v", err)
+        }
+    }
+    
+    return nil
 }
 
 // Overload XDSServer.UpsertEnvoyResources to start Envoy on demand

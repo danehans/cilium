@@ -109,6 +109,7 @@ type Daemon struct {
 	ctx              context.Context
 	clientset        k8sClient.Clientset
 	buildEndpointSem *semaphore.Weighted
+	tproxy           *proxy.Tproxy
 	l7Proxy          *proxy.Proxy
 	svc              *service.Service
 	rec              *recorder.Recorder
@@ -609,16 +610,23 @@ func newDaemon(ctx context.Context, cleaner *daemonCleanup, params *daemonParams
 	// the daemon's proxy into the k8s watcher and each endpoint.
 	// Note: d.endpointManager needs to be set before this
 	bootstrapStats.proxyStart.Start()
-	// FIXME: Make the port range configurable.
-	if option.Config.EnableL7Proxy {
+	if option.Config.EnableTproxy && option.Config.EnableL7Proxy {
+		return nil, nil, fmt.Errorf("invalid config, only one of enable-l7-proxy or enable-tproxy is supported.")
+	}
+
+	switch {
+	case option.Config.EnableL7Proxy:
+		// FIXME: Make the port range configurable.
 		d.l7Proxy = proxy.StartProxySupport(10000, 20000, option.Config.RunDir,
 			&d, option.Config.AgentLabels, d.datapath, d.endpointManager, d.ipcache)
-	} else {
-		log.Info("L7 proxies are disabled")
-		if option.Config.EnableEnvoyConfig {
-			log.Warningf("%s is not functional when L7 proxies are disabled",
-				option.EnableEnvoyConfig)
-		}
+		case option.Config.EnableTproxy:
+			
+		default:
+			log.Info("L7 proxies are disabled")
+			if option.Config.EnableEnvoyConfig {
+				log.Warningf("%s is not functional when L7 proxies are disabled",
+					option.EnableEnvoyConfig)
+			}
 	}
 	bootstrapStats.proxyStart.End(true)
 
