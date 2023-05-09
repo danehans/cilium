@@ -4,7 +4,7 @@
 package ipcache
 
 import (
-	"net"
+	"net/netip"
 
 	cmtypes "github.com/cilium/cilium/pkg/clustermesh/types"
 )
@@ -30,7 +30,7 @@ type IPIdentityMappingListener interface {
 	// hostIP is optional and may only be non-nil for an Upsert modification.
 	// k8sMeta contains the Kubernetes pod namespace and name behind the IP
 	// and may be nil.
-	OnIPIdentityCacheChange(modType CacheModification, cidrCluster cmtypes.PrefixCluster, oldHostIP, newHostIP net.IP,
+	OnIPIdentityCacheChange(modType CacheModification, cidrCluster cmtypes.PrefixCluster, oldHostIP, newHostIP netip.Addr,
 		oldID *Identity, newID Identity, encryptKey uint8, nodeID uint16, k8sMeta *K8sMetadata)
 
 	// OnIPIdentityCacheGC will be called to sync other components which are

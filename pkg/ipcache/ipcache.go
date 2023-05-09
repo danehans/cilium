@@ -64,7 +64,7 @@ func (i Identity) equals(o Identity) bool {
 
 // IPKeyPair is the (IP, key) pair used of the identity
 type IPKeyPair struct {
-	IP  net.IP
+	IP  netip.Addr
 	Key uint8
 }
 
@@ -218,14 +218,14 @@ func endpointIPToCIDR(ip net.IP) *net.IPNet {
 }
 
 // GetHostIP returns the host IP for the given IP address.
-func (ipc *IPCache) GetHostIP(ip string) net.IP {
+func (ipc *IPCache) GetHostIP(ip string) netip.Addr {
 	ipc.mutex.RLock()
 	defer ipc.mutex.RUnlock()
 	hostIP, _ := ipc.getHostIPCache(ip)
 	return hostIP
 }
 
-func (ipc *IPCache) getHostIPCache(ip string) (net.IP, uint8) {
+func (ipc *IPCache) getHostIPCache(ip string) (netip.Addr, uint8) {
 	ipKeyPair := ipc.ipToHostIPCache[ip]
 	return ipKeyPair.IP, ipKeyPair.Key
 }
@@ -256,7 +256,7 @@ func (ipc *IPCache) getK8sMetadata(ip string) *K8sMetadata {
 // given IP. It is optional (may be nil) and is propagated to the listeners.
 // k8sMeta contains Kubernetes-specific metadata such as pod namespace and pod
 // name belonging to the IP (may be nil).
-func (ipc *IPCache) Upsert(ip string, hostIP net.IP, hostKey uint8, k8sMeta *K8sMetadata, newIdentity Identity) (namedPortsChanged bool, err error) {
+func (ipc *IPCache) Upsert(ip string, hostIP netip.Addr, hostKey uint8, k8sMeta *K8sMetadata, newIdentity Identity) (namedPortsChanged bool, err error) {
 	ipc.mutex.Lock()
 	defer ipc.mutex.Unlock()
 	return ipc.upsertLocked(ip, hostIP, hostKey, k8sMeta, newIdentity, false /* !force */)
@@ -279,7 +279,7 @@ func (ipc *IPCache) Upsert(ip string, hostIP net.IP, hostKey uint8, k8sMeta *K8s
 // range support which identifies prefix or host IPs using prefix/ip + ClusterID.
 func (ipc *IPCache) upsertLocked(
 	ip string,
-	hostIP net.IP,
+	hostIP netip.Addr,
 	hostKey uint8,
 	k8sMeta *K8sMetadata,
 	newIdentity Identity,
@@ -326,7 +326,7 @@ func (ipc *IPCache) upsertLocked(
 
 		// Skip update if IP is already mapped to the given identity
 		// and the host IP hasn't changed.
-		if cachedIdentity.equals(newIdentity) && oldHostIP.Equal(hostIP) &&
+		if cachedIdentity.equals(newIdentity) && oldHostIP.Compare(hostIP) == 0 &&
 			hostKey == oldHostKey && metaEqual {
 			metrics.IPCacheErrorsTotal.WithLabelValues(
 				metricTypeUpsert, metricErrorIdempotent,
@@ -367,7 +367,7 @@ func (ipc *IPCache) upsertLocked(
 			cidrClusterStr := cidrCluster.String()
 			if cidrIdentity, cidrFound := ipc.ipToIdentityCache[cidrClusterStr]; cidrFound {
 				oldHostIP, _ = ipc.getHostIPCache(cidrClusterStr)
-				if cidrIdentity.ID != newIdentity.ID || !oldHostIP.Equal(hostIP) {
+				if cidrIdentity.ID != newIdentity.ID || oldHostIP.Compare(hostIP) != 0 {
 					scopedLog.Debug("New endpoint IP started shadowing existing CIDR to identity mapping")
 					cidrIdentity.shadowed = true
 					ipc.ipToIdentityCache[cidrClusterStr] = cidrIdentity
@@ -408,7 +408,7 @@ func (ipc *IPCache) upsertLocked(
 	}
 	ipc.identityToIPCache[newIdentity.ID][ip] = struct{}{}
 
-	if hostIP == nil {
+	if !hostIP.IsValid() {
 		delete(ipc.ipToHostIPCache, ip)
 	} else {
 		ipc.ipToHostIPCache[ip] = IPKeyPair{IP: hostIP, Key: hostKey}
@@ -426,7 +426,7 @@ func (ipc *IPCache) upsertLocked(
 		namedPortsChanged = namedPortsChanged && ipc.needNamedPorts.Load()
 	}
 
-	if hostIP != nil {
+	if hostIP.IsValid() {
 		hostID = ipc.AllocateNodeID(hostIP)
 	}
 
@@ -558,7 +558,7 @@ func (ipc *IPCache) DumpToListenerLocked(listener IPIdentityMappingListener) {
 			cidrCluster = addrCluster.AsPrefixCluster()
 		}
 		nodeID := uint16(0)
-		if hostIP != nil {
+		if hostIP.IsValid() {
 			nodeID = ipc.AllocateNodeID(hostIP)
 		}
 		listener.OnIPIdentityCacheChange(Upsert, cidrCluster, nil, hostIP, nil, identity, encryptKey, nodeID, k8sMeta)
@@ -777,9 +777,9 @@ func (ipc *IPCache) LookupByIdentity(id identity.NumericIdentity) (ips []string)
 // LookupByHostRLocked returns the list of IPs returns the set of IPs
 // (endpoint or CIDR prefix) that have hostIPv4 or hostIPv6 associated as the
 // host of the entry. Requires the caller to hold the RLock.
-func (ipc *IPCache) LookupByHostRLocked(hostIPv4, hostIPv6 net.IP) (cidrs []net.IPNet) {
+func (ipc *IPCache) LookupByHostRLocked(hostIPv4, hostIPv6 netip.Addr) (cidrs []netip.Prefix) {
 	for ip, host := range ipc.ipToHostIPCache {
-		if hostIPv4 != nil && host.IP.Equal(hostIPv4) || hostIPv6 != nil && host.IP.Equal(hostIPv6) {
+		if hostIPv4.IsValid() && host.IP.Compare(hostIPv4) || hostIPv6 != nil && host.IP.Equal(hostIPv6) {
 			_, cidr, err := net.ParseCIDR(ip)
 			if err != nil {
 				endpointIP := net.ParseIP(ip)

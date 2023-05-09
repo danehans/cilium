@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"fmt"
 	"net"
+	"net/netip"
 )
 
 // NewCIDR returns a new CIDR using a net.IPNet
@@ -99,6 +100,17 @@ func Equal(n, o *net.IPNet) bool {
 	}
 	return n.IP.Equal(o.IP) &&
 		bytes.Equal(n.Mask, o.Mask)
+}
+
+// PrefixEqual returns true if the n and o netip.Prefixes are Equal.
+func PrefixEqual(n, o *netip.Prefix) bool {
+	if n == nil || o == nil {
+		return n == o
+	}
+	if &n == &o {
+		return true
+	}
+	return false
 }
 
 // ContainsAll returns true if 'ipNets1' contains all net.IPNet of 'ipNets2'

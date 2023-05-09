@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"strconv"
 
@@ -287,7 +288,15 @@ func (a *Agent) RestoreFinished() error {
 	return nil
 }
 
-func (a *Agent) UpdatePeer(nodeName, pubKeyHex string, nodeIPv4, nodeIPv6 net.IP) error {
+func (a *Agent) UpdatePeer(nodeName, pubKeyHex string, nodeIPv4, nodeIPv6 netip.Addr) error {
+	// Ensure the provides IPs are valid
+	if !nodeIPv4.IsValid() {
+		return fmt.Errorf("invalid IPv4 node address: %v", nodeIPv4)
+	}
+	if !nodeIPv6.IsValid() {
+		return fmt.Errorf("invalid IPv6 node address: %v", nodeIPv6)
+	}
+
 	// To avoid running into a deadlock, we need to lock the IPCache before
 	// calling a.Lock(), because IPCache might try to call into
 	// OnIPIdentityCacheChange concurrently
@@ -309,7 +318,7 @@ func (a *Agent) UpdatePeer(nodeName, pubKeyHex string, nodeIPv4, nodeIPv6 net.IP
 		}
 	}
 
-	var allowedIPs []net.IPNet = nil
+	var allowedIPs []netip.Prefix = nil
 	if prev := a.peerByNodeName[nodeName]; prev != nil {
 		// Handle pubKey change
 		if prev.pubKey != pubKey {
@@ -324,11 +333,11 @@ func (a *Agent) UpdatePeer(nodeName, pubKeyHex string, nodeIPv4, nodeIPv6 net.IP
 		allowedIPs = prev.allowedIPs
 
 		// Handle Node IP change
-		if !prev.nodeIPv4.Equal(nodeIPv4) {
+		if prev.nodeIPv4.Compare(nodeIPv4) != 0 {
 			delete(a.nodeNameByNodeIP, prev.nodeIPv4.String())
 			allowedIPs = nil // reset allowedIPs and re-initialize below
 		}
-		if !prev.nodeIPv6.Equal(nodeIPv6) {
+		if prev.nodeIPv6.Compare(nodeIPv6) != 0 {
 			delete(a.nodeNameByNodeIP, prev.nodeIPv6.String())
 			allowedIPs = nil // reset allowedIPs and re-initialize below
 		}
@@ -338,23 +347,19 @@ func (a *Agent) UpdatePeer(nodeName, pubKeyHex string, nodeIPv4, nodeIPv6 net.IP
 		// (Re-)Initialize the allowedIPs list by querying the IPCache. The
 		// allowedIPs will be updated by OnIPIdentityCacheChange after this
 		// function returns.
-		var lookupIPv4, lookupIPv6 net.IP
-		if option.Config.EnableIPv4 && nodeIPv4 != nil {
+		var lookupIPv4, lookupIPv6 netip.Addr
+		if option.Config.EnableIPv4 {
 			lookupIPv4 = nodeIPv4
 			if a.nodeToNodeEncryption {
-				allowedIPs = append(allowedIPs, net.IPNet{
-					IP:   nodeIPv4,
-					Mask: net.CIDRMask(net.IPv4len*8, net.IPv4len*8),
-				})
+				prefix := netip.PrefixFrom(nodeIPv4, net.IPv4len*8)
+				allowedIPs = append(allowedIPs, prefix)
 			}
 		}
-		if option.Config.EnableIPv6 && nodeIPv6 != nil {
+		if option.Config.EnableIPv6 {
 			lookupIPv6 = nodeIPv6
 			if a.nodeToNodeEncryption {
-				allowedIPs = append(allowedIPs, net.IPNet{
-					IP:   nodeIPv6,
-					Mask: net.CIDRMask(net.IPv6len*8, net.IPv6len*8),
-				})
+				prefix := netip.PrefixFrom(nodeIPv6, net.IPv6len*8)
+				allowedIPs = append(allowedIPs, prefix)
 			}
 		}
 		allowedIPs = append(allowedIPs, a.ipCache.LookupByHostRLocked(lookupIPv4, lookupIPv6)...)
@@ -494,7 +499,7 @@ func loadOrGeneratePrivKey(filePath string) (key wgtypes.Key, err error) {
 // OnIPIdentityCacheChange implements ipcache.IPIdentityMappingListener
 func (a *Agent) OnIPIdentityCacheChange(modType ipcache.CacheModification, cidrCluster cmtypes.PrefixCluster, oldHostIP, newHostIP net.IP,
 	_ *ipcache.Identity, _ ipcache.Identity, _ uint8, _ uint16, _ *ipcache.K8sMetadata) {
-	ipnet := cidrCluster.AsIPNet()
+	ipnet := cidrCluster.Prefix()
 
 	// This function is invoked from the IPCache with the
 	// ipcache.IPIdentityCache lock held. We therefore need to be careful when
@@ -628,16 +633,16 @@ func (a *Agent) Status(withPeers bool) (*models.WireguardStatus, error) {
 type peerConfig struct {
 	pubKey             wgtypes.Key
 	endpoint           *net.UDPAddr
-	nodeIPv4, nodeIPv6 net.IP
-	allowedIPs         []net.IPNet
+	nodeIPv4, nodeIPv6 netip.Addr
+	allowedIPs         []netip.Prefix
 }
 
 // removeAllowedIP removes ip from the list of allowedIPs and returns true
 // if the list of allowedIPs changed
-func (p *peerConfig) removeAllowedIP(ip net.IPNet) (updated bool) {
+func (p *peerConfig) removeAllowedIP(ip netip.Prefix) (updated bool) {
 	filtered := p.allowedIPs[:0]
 	for _, allowedIP := range p.allowedIPs {
-		if cidr.Equal(&allowedIP, &ip) {
+		if cidr.PrefixEqual(&allowedIP, &ip) {
 			updated = true
 		} else {
 			filtered = append(filtered, allowedIP)
@@ -650,9 +655,9 @@ func (p *peerConfig) removeAllowedIP(ip net.IPNet) (updated bool) {
 
 // insertAllowedIP inserts ip into the list of allowedIPs and returns true
 // if the list of allowedIPs changed
-func (p *peerConfig) insertAllowedIP(ip net.IPNet) (updated bool) {
+func (p *peerConfig) insertAllowedIP(ip netip.Prefix) (updated bool) {
 	for _, allowedIP := range p.allowedIPs {
-		if cidr.Equal(&allowedIP, &ip) {
+		if cidr.PrefixEqual(&allowedIP, &ip) {
 			return false
 		}
 	}

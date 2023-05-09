@@ -5,7 +5,7 @@ package types
 
 import (
 	"context"
-	"net"
+	"net/netip"
 	"strings"
 	"sync"
 
@@ -62,5 +62,5 @@ func NewResourceID(kind ResourceKind, namespace, name string) ResourceID {
 
 // NodeHandler is responsible for the management of node identities.
 type NodeHandler interface {
-	AllocateNodeID(net.IP) uint16
+	AllocateNodeID(netip.Addr) uint16
 }
