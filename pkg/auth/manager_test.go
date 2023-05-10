@@ -5,6 +5,7 @@ package auth
 
 import (
 	"net"
+	"net/netip"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -128,13 +129,13 @@ func Test_authManager_authRequired(t *testing.T) {
 
 // Fake IPCache
 type fakeIPCache struct {
-	ipHostMappings map[string]net.IP
+	ipHostMappings map[string]netip.Addr
 }
 
 func newFakeIPCache(mappings map[string]string) *fakeIPCache {
-	m := map[string]net.IP{}
+	m := map[string]netip.Addr{}
 	for ip, hostIP := range mappings {
-		m[ip] = net.ParseIP(hostIP)
+		m[ip] = netip.MustParseAddr(hostIP)
 	}
 
 	return &fakeIPCache{
@@ -142,11 +143,12 @@ func newFakeIPCache(mappings map[string]string) *fakeIPCache {
 	}
 }
 
-func (r *fakeIPCache) GetHostIP(ip string) net.IP {
-	return r.ipHostMappings[ip]
+func (r *fakeIPCache) GetHostIP(ip string) *netip.Addr {
+	hostIP := r.ipHostMappings[ip]
+	return &hostIP
 }
 
-func (r *fakeIPCache) AllocateNodeID(net.IP) uint16 {
+func (r *fakeIPCache) AllocateNodeID(*netip.Addr) uint16 {
 	return 0
 }
 

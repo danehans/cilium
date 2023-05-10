@@ -6,7 +6,7 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"net"
+	"net/netip"
 	"path"
 	"sort"
 
@@ -320,25 +320,25 @@ func (m *VMManager) UpdateCiliumNodeResource(n *nodeTypes.RegisterNode, cew *cil
 
 // UpdateCiliumEndpointResource updates the CiliumNode resource representing the
 // local node
-func (m *VMManager) UpdateCiliumEndpointResource(name string, id *identity.Identity, ipAddresses []nodeTypes.Address, nodeIP net.IP) {
+func (m *VMManager) UpdateCiliumEndpointResource(name string, id *identity.Identity, ipAddresses []nodeTypes.Address, nodeIP *netip.Addr) {
 	var addresses []*ciliumv2.AddressPair
 	i := 0
 	for _, addr := range ipAddresses {
 		if len(addresses) == i {
 			addresses = append(addresses, &ciliumv2.AddressPair{})
 		}
-		if ipv4 := addr.IP.To4(); ipv4 != nil {
+		if addr.IP.Is4() {
 			if addresses[i].IPV4 != "" {
 				addresses = append(addresses, &ciliumv2.AddressPair{})
 				i++
 			}
-			addresses[i].IPV4 = ipv4.String()
-		} else if ipv6 := addr.IP.To16(); ipv6 != nil {
+			addresses[i].IPV4 = addr.IP.String()
+		} else if addr.IP.Is6() {
 			if addresses[i].IPV6 != "" {
 				addresses = append(addresses, &ciliumv2.AddressPair{})
 				i++
 			}
-			addresses[i].IPV6 = ipv6.String()
+			addresses[i].IPV6 = addr.IP.String()
 		}
 	}
 

@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"regexp"
 	"strconv"
@@ -1154,13 +1155,13 @@ func (m *IptablesManager) installForwardChainRulesIpX(prog iptablesInterface, if
 // AddToNodeIpset adds an IP address to the ipset for cluster nodes. It creates
 // the ipset if it doesn't already exist and doesn't error if either the ipset
 // or the IP already exist.
-func AddToNodeIpset(nodeIP net.IP) {
+func AddToNodeIpset(nodeIP *netip.Addr) {
 	scopedLog := log.WithField(logfields.IPAddr, nodeIP.String())
 	ciliumNodeIpset := ciliumNodeIpsetV4
-	if ip.IsIPv6(nodeIP) {
+	if ip.IsNetAddrV6(nodeIP) {
 		ciliumNodeIpset = ciliumNodeIpsetV6
 	}
-	if err := createIpset(ciliumNodeIpset, ip.IsIPv6(nodeIP)); err != nil {
+	if err := createIpset(ciliumNodeIpset, ip.IsNetAddrV6(nodeIP)); err != nil {
 		scopedLog.WithError(err).Errorf("Failed to create ipset %s", ciliumNodeIpset)
 		return
 	}
@@ -1171,10 +1172,10 @@ func AddToNodeIpset(nodeIP net.IP) {
 }
 
 // RemoveFromBodeIpset removes an IP address from the ipset for cluster nodes.
-func RemoveFromNodeIpset(nodeIP net.IP) {
+func RemoveFromNodeIpset(nodeIP *netip.Addr) {
 	scopedLog := log.WithField(logfields.IPAddr, nodeIP.String())
 	ciliumNodeIpset := ciliumNodeIpsetV4
-	if ip.IsIPv6(nodeIP) {
+	if ip.IsNetAddrV6(nodeIP) {
 		ciliumNodeIpset = ciliumNodeIpsetV6
 	}
 	progArgs := []string{"del", ciliumNodeIpset, nodeIP.String()}

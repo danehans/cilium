@@ -5,7 +5,7 @@ package auth
 
 import (
 	"fmt"
-	"net"
+	"net/netip"
 	"time"
 
 	"github.com/cilium/cilium/pkg/auth/certs"
@@ -23,8 +23,8 @@ type authManager struct {
 
 // ipCache is the set of interactions the auth manager performs with the IPCache
 type ipCache interface {
-	GetHostIP(ip string) net.IP
-	AllocateNodeID(net.IP) uint16
+	GetHostIP(ip string) *netip.Addr
+	AllocateNodeID(*netip.Addr) uint16
 }
 
 // authHandler is responsible to handle authentication for a specific auth type
@@ -37,7 +37,7 @@ type authHandler interface {
 type authRequest struct {
 	localIdentity  identity.NumericIdentity
 	remoteIdentity identity.NumericIdentity
-	remoteHostIP   net.IP
+	remoteHostIP   netip.Addr
 }
 
 type authResponse struct {
@@ -114,7 +114,7 @@ func (a *authManager) authRequired(dn *monitor.DropNotify, ci *monitor.Connectio
 		ci:             ci,
 		localIdentity:  authReq.localIdentity,
 		remoteIdentity: authReq.remoteIdentity,
-		remoteNodeID:   a.ipCache.AllocateNodeID(authReq.remoteHostIP),
+		remoteNodeID:   a.ipCache.AllocateNodeID(&authReq.remoteHostIP),
 		authType:       authType,
 		expirationTime: authResp.expirationTime,
 	}
@@ -133,19 +133,21 @@ func (a *authManager) buildAuthRequest(dn *monitor.DropNotify, ci *monitor.Conne
 
 	var localIdentity identity.NumericIdentity
 	var remoteIdentity identity.NumericIdentity
-	var remoteHostIP net.IP
+	var remoteHostIP *netip.Addr
 
 	if isIngress(dn) {
 		localIdentity = dn.DstLabel
 		remoteIdentity = dn.SrcLabel
-		remoteHostIP = a.hostIPForConnIP(ci.SrcIP)
+		connIP := ip.MustAddrFromIP(ci.SrcIP)
+		remoteHostIP = a.hostIPForConnIP(&connIP)
 		if remoteHostIP == nil {
 			return nil, fmt.Errorf("failed to get host IP of connection source IP %s", ci.SrcIP)
 		}
 	} else {
 		localIdentity = dn.SrcLabel
 		remoteIdentity = dn.DstLabel
-		remoteHostIP = a.hostIPForConnIP(ci.DstIP)
+		connIP := ip.MustAddrFromIP(ci.DstIP)
+		remoteHostIP = a.hostIPForConnIP(&connIP)
 		if remoteHostIP == nil {
 			return nil, fmt.Errorf("failed to get host IP of connection destination IP %s", ci.DstIP)
 		}
@@ -154,11 +156,15 @@ func (a *authManager) buildAuthRequest(dn *monitor.DropNotify, ci *monitor.Conne
 	return &authRequest{
 		localIdentity:  localIdentity,
 		remoteIdentity: remoteIdentity,
-		remoteHostIP:   remoteHostIP,
+		remoteHostIP:   *remoteHostIP,
 	}, nil
 }
 
-func (a *authManager) hostIPForConnIP(connIP net.IP) net.IP {
+func (a *authManager) hostIPForConnIP(connIP *netip.Addr) *netip.Addr {
+	if connIP == nil {
+		return nil
+	}
+
 	hostIP := a.ipCache.GetHostIP(connIP.String())
 	if hostIP != nil {
 		return hostIP
@@ -167,9 +173,9 @@ func (a *authManager) hostIPForConnIP(connIP net.IP) net.IP {
 	// Checking for Cilium's internal IP (cilium_host).
 	// This might be the case when checking ingress auth after egress L7 policies are applied and therefore traffic
 	// gets rerouted via Cilium's envoy proxy.
-	if ip.IsIPv4(connIP) {
+	if ip.IsNetAddrV4(connIP) {
 		return a.ipCache.GetHostIP(fmt.Sprintf("%s/32", connIP))
-	} else if ip.IsIPv6(connIP) {
+	} else if ip.IsNetAddrV6(connIP) {
 		return a.ipCache.GetHostIP(fmt.Sprintf("%s/128", connIP))
 	}
 

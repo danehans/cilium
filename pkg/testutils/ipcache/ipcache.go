@@ -4,7 +4,6 @@
 package testipcache
 
 import (
-	"net"
 	"net/netip"
 
 	"github.com/cilium/cilium/pkg/identity"
@@ -33,7 +32,7 @@ func (m *MockIPCache) LookupByIP(IP string) (ipcache.Identity, bool) {
 	return ipcache.Identity{}, false
 }
 
-func (m *MockIPCache) Upsert(ip string, hostIP net.IP, hostKey uint8, k8sMeta *ipcache.K8sMetadata, newIdentity ipcache.Identity) (namedPortsChanged bool, err error) {
+func (m *MockIPCache) Upsert(ip string, hostIP *netip.Addr, hostKey uint8, k8sMeta *ipcache.K8sMetadata, newIdentity ipcache.Identity) (namedPortsChanged bool, err error) {
 	return false, nil
 }
 

@@ -5,7 +5,7 @@ package fake
 
 import (
 	"context"
-	"net"
+	"net/netip"
 
 	"github.com/cilium/cilium/api/v1/models"
 	datapath "github.com/cilium/cilium/pkg/datapath/types"
@@ -65,7 +65,7 @@ func (n *FakeNodeHandler) NodeCleanNeighbors(migrateOnly bool) {
 	return
 }
 
-func (n *FakeNodeHandler) AllocateNodeID(_ net.IP) uint16 {
+func (n *FakeNodeHandler) AllocateNodeID(_ *netip.Addr) uint16 {
 	return 0
 }
 

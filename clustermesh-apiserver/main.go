@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
+	"net/netip"
 	"os"
 	"path"
 	"reflect"
@@ -417,40 +417,42 @@ func updateEndpoint(oldEp, newEp *types.CiliumEndpoint) {
 	var ipsAdded []string
 	if n := newEp.Networking; n != nil {
 		for _, address := range n.Addressing {
-			for _, ip := range []string{address.IPV4, address.IPV6} {
-				if ip == "" {
-					continue
-				}
-
-				keyPath := path.Join(ipcache.IPIdentitiesPath, ipcache.DefaultAddressSpace, ip)
-				entry := identity.IPIdentityPair{
-					IP:           net.ParseIP(ip),
-					Metadata:     "",
-					HostIP:       net.ParseIP(n.NodeIP),
-					K8sNamespace: newEp.Namespace,
-					K8sPodName:   newEp.Name,
-				}
-
-				if newEp.Identity != nil {
-					entry.ID = identity.NumericIdentity(newEp.Identity.ID)
-				}
-
-				if newEp.Encryption != nil {
-					entry.Key = uint8(newEp.Encryption.Key)
-				}
-
-				marshaledEntry, err := json.Marshal(entry)
-				if err != nil {
-					log.WithError(err).Warningf("Unable to JSON marshal entry %#v", entry)
-					continue
-				}
-
-				_, err = kvstore.Client().UpdateIfDifferent(context.Background(), keyPath, marshaledEntry, true)
-				if err != nil {
-					log.WithError(err).Warningf("Unable to update endpoint %s in etcd", keyPath)
-				} else {
-					ipsAdded = append(ipsAdded, ip)
-					log.Infof("Inserted endpoint into etcd: %v", entry)
+			if address != nil {
+				for _, ip := range []string{address.IPV4, address.IPV6} {
+					if ip == "" {
+						continue
+					}
+	
+					keyPath := path.Join(ipcache.IPIdentitiesPath, ipcache.DefaultAddressSpace, ip)
+					entry := identity.IPIdentityPair{
+						IP:           netip.MustParseAddr(ip),
+						Metadata:     "",
+						HostIP:       netip.MustParseAddr(n.NodeIP),
+						K8sNamespace: newEp.Namespace,
+						K8sPodName:   newEp.Name,
+					}
+	
+					if newEp.Identity != nil {
+						entry.ID = identity.NumericIdentity(newEp.Identity.ID)
+					}
+	
+					if newEp.Encryption != nil {
+						entry.Key = uint8(newEp.Encryption.Key)
+					}
+	
+					marshaledEntry, err := json.Marshal(entry)
+					if err != nil {
+						log.WithError(err).Warningf("Unable to JSON marshal entry %#v", entry)
+						continue
+					}
+	
+					_, err = kvstore.Client().UpdateIfDifferent(context.Background(), keyPath, marshaledEntry, true)
+					if err != nil {
+						log.WithError(err).Warningf("Unable to update endpoint %s in etcd", keyPath)
+					} else {
+						ipsAdded = append(ipsAdded, ip)
+						log.Infof("Inserted endpoint into etcd: %v", entry)
+					}
 				}
 			}
 		}

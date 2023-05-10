@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/netip"
 	"path"
 	"sort"
 	"strings"
@@ -97,7 +98,7 @@ func newKVReferenceCounter(s store) *kvReferenceCounter {
 
 // UpsertIPToKVStore updates / inserts the provided IP->Identity mapping into the
 // kvstore, which will subsequently trigger an event in NewIPIdentityWatcher().
-func UpsertIPToKVStore(ctx context.Context, IP, hostIP net.IP, ID identity.NumericIdentity, key uint8,
+func UpsertIPToKVStore(ctx context.Context, IP, hostIP netip.Addr, ID identity.NumericIdentity, key uint8,
 	metadata, k8sNamespace, k8sPodName string, npm types.NamedPortMap) error {
 	// Sort named ports into a slice
 	namedPorts := make([]identity.NamedPort, 0, len(npm))
@@ -205,7 +206,7 @@ type IPIdentityWatcher struct {
 }
 
 type IPCacher interface {
-	Upsert(ip string, hostIP net.IP, hostKey uint8, k8sMeta *K8sMetadata, newIdentity Identity) (bool, error)
+	Upsert(ip string, hostIP *netip.Addr, hostKey uint8, k8sMeta *K8sMetadata, newIdentity Identity) (bool, error)
 	ForEachListener(f func(listener IPIdentityMappingListener))
 	Delete(IP string, source source.Source) (namedPortsChanged bool)
 }
@@ -345,7 +346,7 @@ restart:
 				// and the endpoint-runIPIdentitySync where it bounded to a
 				// lease and a controller which is stopped/removed when the
 				// endpoint is gone.
-				iw.ipcache.Upsert(ip, ipIDPair.HostIP, ipIDPair.Key, k8sMeta, Identity{
+				iw.ipcache.Upsert(ip, &ipIDPair.HostIP, ipIDPair.Key, k8sMeta, Identity{
 					ID:     peerIdentity,
 					Source: source.KVStore,
 				})

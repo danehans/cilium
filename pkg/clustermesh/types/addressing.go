@@ -335,6 +335,10 @@ func (pc PrefixCluster) String() string {
 	return pc.prefix.String() + "@" + strconv.FormatUint(uint64(pc.clusterID), 10)
 }
 
+func (pc PrefixCluster) Prefix() netip.Prefix {
+	return pc.prefix
+}
+
 // AsIPNet returns the IP prefix part of PrefixCluster as a net.IPNet type. This
 // function exists for keeping backward compatibility between the existing
 // components which are not aware of the cluster-aware addressing. Calling

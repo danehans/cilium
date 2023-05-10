@@ -6,7 +6,6 @@ package manager
 import (
 	"context"
 	"errors"
-	"net"
 	"net/netip"
 	"time"
 
@@ -22,7 +21,6 @@ import (
 	"github.com/cilium/cilium/pkg/hive"
 	"github.com/cilium/cilium/pkg/identity"
 	"github.com/cilium/cilium/pkg/inctimer"
-	"github.com/cilium/cilium/pkg/ip"
 	"github.com/cilium/cilium/pkg/ipcache"
 	ipcacheTypes "github.com/cilium/cilium/pkg/ipcache/types"
 	"github.com/cilium/cilium/pkg/labels"
@@ -60,7 +58,7 @@ type nodeEntry struct {
 
 // IPCache is the set of interactions the node manager performs with the ipcache
 type IPCache interface {
-	Upsert(ip string, hostIP net.IP, hostKey uint8, k8sMeta *ipcache.K8sMetadata, newIdentity ipcache.Identity) (bool, error)
+	Upsert(ip string, hostIP *netip.Addr, hostKey uint8, k8sMeta *ipcache.K8sMetadata, newIdentity ipcache.Identity) (bool, error)
 	Delete(IP string, source source.Source) bool
 	UpsertLabels(prefix netip.Prefix, lbls labels.Labels, src source.Source, rid ipcacheTypes.ResourceID)
 }
@@ -362,7 +360,7 @@ func (m *manager) NodeUpdated(n nodeTypes.Node) {
 	}
 
 	for _, address := range n.IPAddresses {
-		var tunnelIP net.IP
+		var tunnelIP *netip.Addr
 		key := n.EncryptionKey
 
 		// If the host firewall is enabled, all traffic to remote nodes must go
@@ -375,7 +373,7 @@ func (m *manager) NodeUpdated(n nodeTypes.Node) {
 		}
 
 		if option.Config.NodeIpsetNeeded() && address.Type == addressing.NodeInternalIP {
-			iptables.AddToNodeIpset(address.IP)
+			iptables.AddToNodeIpset(&address.IP)
 		}
 
 		if skipIPCache(address) {
@@ -396,10 +394,8 @@ func (m *manager) NodeUpdated(n nodeTypes.Node) {
 		}
 
 		var prefix netip.Prefix
-		if v4 := address.IP.To4(); v4 != nil {
-			prefix = ip.IPToNetPrefix(v4)
-		} else {
-			prefix = ip.IPToNetPrefix(address.IP.To16())
+		if address.IP.Is4() || address.IP.Is6() {
+			prefix = netip.PrefixFrom(address.IP, address.IP.BitLen())
 		}
 		ipAddrStr := prefix.String()
 		_, err := m.ipcache.Upsert(ipAddrStr, tunnelIP, key, nil, ipcache.Identity{
@@ -427,7 +423,7 @@ func (m *manager) NodeUpdated(n nodeTypes.Node) {
 		}
 	}
 
-	for _, address := range []net.IP{n.IPv4HealthIP, n.IPv6HealthIP} {
+	for _, address := range []*netip.Addr{n.IPv4HealthIP, n.IPv6HealthIP} {
 		if address == nil {
 			continue
 		}
@@ -443,7 +439,7 @@ func (m *manager) NodeUpdated(n nodeTypes.Node) {
 		}
 	}
 
-	for _, address := range []net.IP{n.IPv4IngressIP, n.IPv6IngressIP} {
+	for _, address := range []*netip.Addr{n.IPv4IngressIP, n.IPv6IngressIP} {
 		if address == nil {
 			continue
 		}
@@ -487,16 +483,14 @@ func (m *manager) NodeUpdated(n nodeTypes.Node) {
 		for _, address := range oldNode.IPAddresses {
 			if option.Config.NodeIpsetNeeded() && address.Type == addressing.NodeInternalIP &&
 				!slices.Contains(ipsAdded, address.IP.String()) {
-				iptables.RemoveFromNodeIpset(address.IP)
+				iptables.RemoveFromNodeIpset(&address.IP)
 			}
 			if skipIPCache(address) {
 				continue
 			}
 			var prefix netip.Prefix
-			if v4 := address.IP.To4(); v4 != nil {
-				prefix = ip.IPToNetPrefix(v4)
-			} else {
-				prefix = ip.IPToNetPrefix(address.IP.To16())
+			if address.IP.Is4() || address.IP.Is6() {
+				prefix = netip.PrefixFrom(address.IP, address.IP.BitLen())
 			}
 			oldNodeIPAddrs = append(oldNodeIPAddrs, prefix.String())
 		}
@@ -605,7 +599,7 @@ func (m *manager) NodeDeleted(n nodeTypes.Node) {
 
 	for _, address := range entry.node.IPAddresses {
 		if option.Config.NodeIpsetNeeded() && address.Type == addressing.NodeInternalIP {
-			iptables.RemoveFromNodeIpset(address.IP)
+			iptables.RemoveFromNodeIpset(&address.IP)
 		}
 
 		if m.legacyNodeIpBehavior() && address.Type != addressing.NodeCiliumInternalIP {
@@ -613,15 +607,13 @@ func (m *manager) NodeDeleted(n nodeTypes.Node) {
 		}
 
 		var prefix netip.Prefix
-		if v4 := address.IP.To4(); v4 != nil {
-			prefix = ip.IPToNetPrefix(v4)
-		} else {
-			prefix = ip.IPToNetPrefix(address.IP.To16())
+		if address.IP.Is4() || address.IP.Is6() {
+			prefix = netip.PrefixFrom(address.IP, address.IP.BitLen())
 		}
 		m.ipcache.Delete(prefix.String(), n.Source)
 	}
 
-	for _, address := range []net.IP{
+	for _, address := range []*netip.Addr{
 		entry.node.IPv4HealthIP, entry.node.IPv6HealthIP,
 		entry.node.IPv4IngressIP, entry.node.IPv6IngressIP,
 	} {

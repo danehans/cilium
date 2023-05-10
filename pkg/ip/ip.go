@@ -842,6 +842,23 @@ func IsIPv6(ip net.IP) bool {
 	return ip != nil && ip.To4() == nil
 }
 
+// IsNetAddrV4 returns true if the given addr is an IPv4 address
+func IsNetAddrV4(addr *netip.Addr) bool {
+	if addr == nil {
+		return false
+	}
+	return addr.Is4()
+}
+
+// IsNetAddrV6 returns true if the given addr is an IPv6 address,
+// including IPv4-mapped IPv6 addresses.
+func IsNetAddrV6(addr *netip.Addr) bool {
+	if addr == nil {
+		return false
+	}
+	return addr.Is6()
+}
+
 // ListContainsIP returns whether a list of IPs contains a given IP.
 func ListContainsIP(ipList []net.IP, ip net.IP) bool {
 	for _, e := range ipList {

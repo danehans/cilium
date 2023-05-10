@@ -5,7 +5,7 @@ package types
 
 import (
 	"encoding/json"
-	"net"
+	"net/netip"
 	"path"
 	"strings"
 
@@ -69,14 +69,25 @@ func ParseCiliumNode(n *ciliumv2.CiliumNode) (node Node) {
 		}
 	}
 
-	node.IPv4HealthIP = net.ParseIP(n.Spec.HealthAddressing.IPv4)
-	node.IPv6HealthIP = net.ParseIP(n.Spec.HealthAddressing.IPv6)
-
-	node.IPv4IngressIP = net.ParseIP(n.Spec.IngressAddressing.IPV4)
-	node.IPv6IngressIP = net.ParseIP(n.Spec.IngressAddressing.IPV6)
+	healthV4, err := netip.ParseAddr(n.Spec.HealthAddressing.IPv4)
+	if err == nil {
+		node.IPv4HealthIP = &healthV4
+	}
+	healthV6, err := netip.ParseAddr(n.Spec.HealthAddressing.IPv6)
+	if err == nil {
+		node.IPv6HealthIP = &healthV6
+	}
+	ingressV4, err := netip.ParseAddr(n.Spec.IngressAddressing.IPV4)
+	if err == nil {
+		node.IPv4IngressIP = &ingressV4
+	}
+	ingressV6, err := netip.ParseAddr(n.Spec.IngressAddressing.IPV6)
+	if err == nil {
+		node.IPv6IngressIP = &ingressV6
+	}
 
 	for _, address := range n.Spec.Addresses {
-		if ip := net.ParseIP(address.IP); ip != nil {
+		if ip, err := netip.ParseAddr(address.IP); err == nil {
 			node.IPAddresses = append(node.IPAddresses, Address{Type: address.Type, IP: ip})
 		}
 	}
@@ -211,19 +222,19 @@ type Node struct {
 
 	// IPv4HealthIP if not nil, this is the IPv4 address of the
 	// cilium-health endpoint located on the node.
-	IPv4HealthIP net.IP
+	IPv4HealthIP *netip.Addr
 
 	// IPv6HealthIP if not nil, this is the IPv6 address of the
 	// cilium-health endpoint located on the node.
-	IPv6HealthIP net.IP
+	IPv6HealthIP *netip.Addr
 
 	// IPv4IngressIP if not nil, this is the IPv4 address of the
 	// Ingress listener on the node.
-	IPv4IngressIP net.IP
+	IPv4IngressIP *netip.Addr
 
 	// IPv6IngressIP if not nil, this is the IPv6 address of the
 	// Ingress listener located on the node.
-	IPv6IngressIP net.IP
+	IPv6IngressIP *netip.Addr
 
 	// ClusterID is the unique identifier of the cluster
 	ClusterID uint32
@@ -262,7 +273,7 @@ func (n *Node) Fullname() string {
 // +k8s:deepcopy-gen=true
 type Address struct {
 	Type addressing.AddressType
-	IP   net.IP
+	IP   netip.Addr
 }
 
 // GetNodeIP returns one of the node's IP addresses available with the
@@ -270,11 +281,11 @@ type Address struct {
 // - NodeInternalIP
 // - NodeExternalIP
 // - other IP address type
-func (n *Node) GetNodeIP(ipv6 bool) net.IP {
-	var backupIP net.IP
+func (n *Node) GetNodeIP(ipv6 bool) *netip.Addr {
+	var backupIP *netip.Addr
 	for _, addr := range n.IPAddresses {
-		if (ipv6 && addr.IP.To4() != nil) ||
-			(!ipv6 && addr.IP.To4() == nil) {
+		if (ipv6 && !addr.IP.Is6()) ||
+			(!ipv6 && addr.IP.Is4()) {
 			continue
 		}
 		switch addr.Type {
@@ -283,16 +294,16 @@ func (n *Node) GetNodeIP(ipv6 bool) net.IP {
 			continue
 		// Always prefer a cluster internal IP
 		case addressing.NodeInternalIP:
-			return addr.IP
+			return &addr.IP
 		case addressing.NodeExternalIP:
 			// Fall back to external Node IP
 			// if no internal IP could be found
-			backupIP = addr.IP
+			backupIP = &addr.IP
 		default:
 			// As a last resort, if no internal or external
 			// IP was found, use any node address available
 			if backupIP == nil {
-				backupIP = addr.IP
+				backupIP = &addr.IP
 			}
 		}
 	}
@@ -301,13 +312,13 @@ func (n *Node) GetNodeIP(ipv6 bool) net.IP {
 
 // GetExternalIP returns ExternalIP of k8s Node. If not present, then it
 // returns nil;
-func (n *Node) GetExternalIP(ipv6 bool) net.IP {
+func (n *Node) GetExternalIP(ipv6 bool) *netip.Addr {
 	for _, addr := range n.IPAddresses {
-		if (ipv6 && addr.IP.To4() != nil) || (!ipv6 && addr.IP.To4() == nil) {
+		if (ipv6 && addr.IP.Is4()) || (!ipv6 && addr.IP.Is6()) {
 			continue
 		}
 		if addr.Type == addressing.NodeExternalIP {
-			return addr.IP
+			return &addr.IP
 		}
 	}
 
@@ -316,14 +327,14 @@ func (n *Node) GetExternalIP(ipv6 bool) net.IP {
 
 // GetK8sNodeIPs returns k8s Node IP (either InternalIP or ExternalIP or nil;
 // the former is preferred).
-func (n *Node) GetK8sNodeIP() net.IP {
-	var externalIP net.IP
+func (n *Node) GetK8sNodeIP() *netip.Addr {
+	var externalIP *netip.Addr
 
 	for _, addr := range n.IPAddresses {
 		if addr.Type == addressing.NodeInternalIP {
-			return addr.IP
+			return &addr.IP
 		} else if addr.Type == addressing.NodeExternalIP {
-			externalIP = addr.IP
+			externalIP = &addr.IP
 		}
 	}
 
@@ -332,14 +343,14 @@ func (n *Node) GetK8sNodeIP() net.IP {
 
 // GetCiliumInternalIP returns the CiliumInternalIP e.g. the IP associated
 // with cilium_host on the node.
-func (n *Node) GetCiliumInternalIP(ipv6 bool) net.IP {
+func (n *Node) GetCiliumInternalIP(ipv6 bool) *netip.Addr {
 	for _, addr := range n.IPAddresses {
-		if (ipv6 && addr.IP.To4() != nil) ||
-			(!ipv6 && addr.IP.To4() == nil) {
+		if (ipv6 && addr.IP.Is4()) ||
+			(!ipv6 && addr.IP.Is6()) {
 			continue
 		}
 		if addr.Type == addressing.NodeCiliumInternalIP {
-			return addr.IP
+			return &addr.IP
 		}
 	}
 	return nil
@@ -347,17 +358,17 @@ func (n *Node) GetCiliumInternalIP(ipv6 bool) net.IP {
 
 // SetCiliumInternalIP sets the CiliumInternalIP e.g. the IP associated
 // with cilium_host on the node.
-func (n *Node) SetCiliumInternalIP(newAddr net.IP) {
+func (n *Node) SetCiliumInternalIP(newAddr *netip.Addr) {
 	n.setAddress(addressing.NodeCiliumInternalIP, newAddr)
 }
 
 // SetNodeExternalIP sets the NodeExternalIP.
-func (n *Node) SetNodeExternalIP(newAddr net.IP) {
+func (n *Node) SetNodeExternalIP(newAddr *netip.Addr) {
 	n.setAddress(addressing.NodeExternalIP, newAddr)
 }
 
 // SetNodeInternalIP sets the NodeInternalIP.
-func (n *Node) SetNodeInternalIP(newAddr net.IP) {
+func (n *Node) SetNodeInternalIP(newAddr *netip.Addr) {
 	n.setAddress(addressing.NodeInternalIP, newAddr)
 }
 
@@ -371,21 +382,20 @@ func (n *Node) RemoveAddresses(typ addressing.AddressType) {
 	n.IPAddresses = newAddresses
 }
 
-func (n *Node) setAddress(typ addressing.AddressType, newIP net.IP) {
-	newAddr := Address{Type: typ, IP: newIP}
-
+func (n *Node) setAddress(typ addressing.AddressType, newIP *netip.Addr) {
 	if newIP == nil {
 		n.RemoveAddresses(typ)
 		return
 	}
 
-	ipv6 := newIP.To4() == nil
+	newAddr := Address{Type: typ, IP: *newIP}
+	ipv6 := newIP.Is6()
 	// Try first to replace an existing address with same type
 	for i, addr := range n.IPAddresses {
 		if addr.Type != typ {
 			continue
 		}
-		if ipv6 != (addr.IP.To4() == nil) {
+		if ipv6 != addr.IP.Is4() {
 			// Don't replace if address family is different.
 			continue
 		}
@@ -396,13 +406,13 @@ func (n *Node) setAddress(typ addressing.AddressType, newIP net.IP) {
 
 }
 
-func (n *Node) GetIPByType(addrType addressing.AddressType, ipv6 bool) net.IP {
+func (n *Node) GetIPByType(addrType addressing.AddressType, ipv6 bool) *netip.Addr {
 	for _, addr := range n.IPAddresses {
 		if addr.Type != addrType {
 			continue
 		}
-		if is4 := addr.IP.To4() != nil; (!ipv6 && is4) || (ipv6 && !is4) {
-			return addr.IP
+		if is4 := addr.IP.Is4(); (!ipv6 && is4) || (ipv6 && !is4) {
+			return &addr.IP
 		}
 	}
 	return nil
@@ -451,7 +461,7 @@ func (n *Node) getSecondaryAddresses() []*models.NodeAddressingElement {
 
 	for _, addr := range n.IPAddresses {
 		ipv4 := false
-		if addr.IP.To4() != nil {
+		if addr.IP.Is4() {
 			ipv4 = true
 		}
 		if !n.isPrimaryAddress(addr, ipv4) {

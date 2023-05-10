@@ -6,6 +6,7 @@ package types
 import (
 	"context"
 	"net"
+	"net/netip"
 
 	"github.com/cilium/cilium/api/v1/models"
 	"github.com/cilium/cilium/pkg/cidr"
@@ -138,7 +139,7 @@ type NodeHandler interface {
 
 	// AllocateNodeID allocates a new ID for the given node (by IP) if one wasn't
 	// already assigned.
-	AllocateNodeID(net.IP) uint16
+	AllocateNodeID(*netip.Addr) uint16
 
 	// DumpNodeIDs returns all node IDs and their associated IP addresses.
 	DumpNodeIDs() []*models.NodeID
