@@ -772,6 +772,7 @@ func KeepUniqueAddrs(addrs []netip.Addr) []netip.Addr {
 }
 
 var privateIPBlocks []*net.IPNet
+var privateIPNetBlocks []*netip.Prefix
 
 func initPrivatePrefixes() {
 	// We only care about global scope prefixes here.
@@ -818,6 +819,17 @@ func IsPublicAddr(ip net.IP) bool {
 	return true
 }
 
+// IsPublicNetIPAddr returns whether a given global IP is from
+// a public range.
+func IsPublicNetIPAddr(ip *netip.Addr) bool {
+	for _, block := range privateIPNetBlocks {
+		if block.Contains(*ip) {
+			return false
+		}
+	}
+	return true
+}
+
 // IPToPrefix returns the corresponding IPNet for the given IP.
 func IPToPrefix(ip net.IP) *net.IPNet {
 	bits := net.IPv6len * 8
@@ -846,6 +858,16 @@ func IsIPv6(ip net.IP) bool {
 func ListContainsIP(ipList []net.IP, ip net.IP) bool {
 	for _, e := range ipList {
 		if e.Equal(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// ListContainsIPAddr returns whether a list of IPs contains the given IP.
+func ListContainsIPAddr(ipList []netip.Addr, ip netip.Addr) bool {
+	for _, e := range ipList {
+		if res := e.Compare(ip); res == 0 {
 			return true
 		}
 	}
@@ -959,4 +981,20 @@ func MustAddrsFromIPs(ips []net.IP) []netip.Addr {
 		addrs = append(addrs, MustAddrFromIP(ip))
 	}
 	return addrs
+}
+
+func Is4(ip string) bool {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return false
+	}
+	return addr.Is4()
+}
+
+func Is6(ip string) bool {
+	return !Is4(ip)
+}
+
+func Equal(ip1, ip2 string) bool {
+	return ip1 == ip2
 }

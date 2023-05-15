@@ -5,6 +5,7 @@ package types
 
 import (
 	"encoding/json"
+	"net"
 	"net/netip"
 	"path"
 	"strings"
@@ -15,7 +16,6 @@ import (
 	"github.com/cilium/cilium/pkg/annotation"
 	"github.com/cilium/cilium/pkg/cidr"
 	"github.com/cilium/cilium/pkg/defaults"
-	pkgip "github.com/cilium/cilium/pkg/ip"
 	ipamTypes "github.com/cilium/cilium/pkg/ipam/types"
 	ciliumv2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	"github.com/cilium/cilium/pkg/kvstore/store"
@@ -71,21 +71,45 @@ func ParseCiliumNode(n *ciliumv2.CiliumNode) (node Node) {
 	}
 
 	if _, err := netip.ParseAddr(n.Spec.HealthAddressing.IPv4); err == nil {
-		node.IPv4HealthIP = n.Spec.HealthAddressing.IPv4
+		addr := Address{
+			Type:   addressing.NodeInternalIP,
+			Family: AddressFamilyV4,
+			Value:  n.Spec.HealthAddressing.IPv4,
+		}
+		node.IPv4HealthIP = &addr
 	}
 	if _, err := netip.ParseAddr(n.Spec.HealthAddressing.IPv6); err == nil {
-		node.IPv6HealthIP = n.Spec.HealthAddressing.IPv6
+		addr := Address{
+			Type:   addressing.NodeInternalIP,
+			Family: AddressFamilyV6,
+			Value:  n.Spec.HealthAddressing.IPv6,
+		}
+		node.IPv6HealthIP = &addr
 	}
 	if _, err := netip.ParseAddr(n.Spec.IngressAddressing.IPV4); err == nil {
-		node.IPv4IngressIP = n.Spec.IngressAddressing.IPV4
+		addr := Address{
+			Type:   addressing.NodeInternalIP,
+			Family: AddressFamilyV4,
+			Value:  n.Spec.IngressAddressing.IPV4,
+		}
+		node.IPv4IngressIP = &addr
 	}
 	if _, err := netip.ParseAddr(n.Spec.IngressAddressing.IPV6); err == nil {
-		node.IPv6IngressIP = n.Spec.IngressAddressing.IPV6
+		addr := Address{
+			Type:   addressing.NodeInternalIP,
+			Family: AddressFamilyV6,
+			Value:  n.Spec.IngressAddressing.IPV6,
+		}
+		node.IPv6IngressIP = &addr
 	}
 
 	for _, address := range n.Spec.Addresses {
-		if _, err := netip.ParseAddr(address.IP); err == nil {
-			node.IPAddresses = append(node.IPAddresses, Address{Type: address.Type, IP: address.IP})
+		if addr, err := netip.ParseAddr(address.IP); err == nil {
+			fam := AddressFamilyV4
+			if addr.Is6() {
+				fam = AddressFamilyV6
+			}
+			node.IPAddresses = append(node.IPAddresses, Address{Type: address.Type, Family: fam, Value: address.IP})
 		}
 	}
 
@@ -130,17 +154,17 @@ func (n *Node) ToCiliumNode() *ciliumv2.CiliumNode {
 	for _, ipv6AllocCIDR := range n.IPv6SecondaryAllocCIDRs {
 		podCIDRs = append(podCIDRs, ipv6AllocCIDR.String())
 	}
-	if n.IPv4HealthIP != "" {
-		healthIPv4 = n.IPv4HealthIP
+	if n.IPv4HealthIP != nil {
+		healthIPv4 = n.IPv4HealthIP.Value
 	}
-	if n.IPv6HealthIP != "" {
-		healthIPv6 = n.IPv6HealthIP
+	if n.IPv6HealthIP != nil {
+		healthIPv6 = n.IPv6HealthIP.Value
 	}
-	if n.IPv4IngressIP != "" {
-		ingressIPv4 = n.IPv4IngressIP
+	if n.IPv4IngressIP != nil {
+		ingressIPv4 = n.IPv4IngressIP.Value
 	}
-	if n.IPv6IngressIP != "" {
-		ingressIPv6 = n.IPv6IngressIP
+	if n.IPv6IngressIP != nil {
+		ingressIPv6 = n.IPv6IngressIP.Value
 	}
 
 	for _, address := range n.IPAddresses {
@@ -224,19 +248,19 @@ type Node struct {
 
 	// IPv4HealthIP if not nil, this is the IPv4 address of the
 	// cilium-health endpoint located on the node.
-	IPv4HealthIP string
+	IPv4HealthIP *Address
 
 	// IPv6HealthIP if not nil, this is the IPv6 address of the
 	// cilium-health endpoint located on the node.
-	IPv6HealthIP string
+	IPv6HealthIP *Address
 
 	// IPv4IngressIP if not nil, this is the IPv4 address of the
 	// Ingress listener on the node.
-	IPv4IngressIP string
+	IPv4IngressIP *Address
 
 	// IPv6IngressIP if not nil, this is the IPv6 address of the
 	// Ingress listener located on the node.
-	IPv6IngressIP string
+	IPv6IngressIP *Address
 
 	// ClusterID is the unique identifier of the cluster
 	ClusterID uint32
@@ -274,9 +298,17 @@ func (n *Node) Fullname() string {
 //
 // +k8s:deepcopy-gen=true
 type Address struct {
-	Type addressing.AddressType
-	IP   string
+	Type   addressing.AddressType
+	Family AddressFamily
+	Value  string
 }
+
+type AddressFamily string
+
+const (
+	AddressFamilyV4 AddressFamily = "IPv4"
+	AddressFamilyV6 AddressFamily = "IPv6"
+)
 
 // GetNodeIP returns one of the node's IP addresses available with the
 // following priority:
@@ -286,8 +318,8 @@ type Address struct {
 func (n *Node) GetNodeIP(ipv6 bool) string {
 	var backupIP string
 	for _, addr := range n.IPAddresses {
-		isV4 := pkgip.Is4(addr.IP)
-		if (ipv6 && isV4) || (!ipv6 && !isV4) {
+		if (ipv6 && addr.IP.To4() != nil) ||
+			(!ipv6 && addr.IP.To4() == nil) {
 			continue
 		}
 		switch addr.Type {
@@ -304,7 +336,7 @@ func (n *Node) GetNodeIP(ipv6 bool) string {
 		default:
 			// As a last resort, if no internal or external
 			// IP was found, use any node address available
-			if backupIP == "" {
+			if backupIP == nil {
 				backupIP = addr.IP
 			}
 		}
@@ -314,10 +346,9 @@ func (n *Node) GetNodeIP(ipv6 bool) string {
 
 // GetExternalIP returns ExternalIP of k8s Node. If not present, then it
 // returns nil;
-func (n *Node) GetExternalIP(ipv6 bool) string {
+func (n *Node) GetExternalIP(ipv6 bool) net.IP {
 	for _, addr := range n.IPAddresses {
-		isV4 := pkgip.Is4(addr.IP)
-		if (ipv6 && isV4) || (!ipv6 && !isV4) {
+		if (ipv6 && addr.IP.To4() != nil) || (!ipv6 && addr.IP.To4() == nil) {
 			continue
 		}
 		if addr.Type == addressing.NodeExternalIP {
@@ -325,13 +356,13 @@ func (n *Node) GetExternalIP(ipv6 bool) string {
 		}
 	}
 
-	return ""
+	return nil
 }
 
 // GetK8sNodeIPs returns k8s Node IP (either InternalIP or ExternalIP or nil;
 // the former is preferred).
-func (n *Node) GetK8sNodeIP() string {
-	var externalIP string
+func (n *Node) GetK8sNodeIP() net.IP {
+	var externalIP net.IP
 
 	for _, addr := range n.IPAddresses {
 		if addr.Type == addressing.NodeInternalIP {
@@ -346,32 +377,32 @@ func (n *Node) GetK8sNodeIP() string {
 
 // GetCiliumInternalIP returns the CiliumInternalIP e.g. the IP associated
 // with cilium_host on the node.
-func (n *Node) GetCiliumInternalIP(ipv6 bool) string {
+func (n *Node) GetCiliumInternalIP(ipv6 bool) net.IP {
 	for _, addr := range n.IPAddresses {
-		isV4 := pkgip.Is4(addr.IP)
-		if (ipv6 && isV4) || (!ipv6 && !isV4) {
+		if (ipv6 && addr.IP.To4() != nil) ||
+			(!ipv6 && addr.IP.To4() == nil) {
 			continue
 		}
 		if addr.Type == addressing.NodeCiliumInternalIP {
 			return addr.IP
 		}
 	}
-	return ""
+	return nil
 }
 
 // SetCiliumInternalIP sets the CiliumInternalIP e.g. the IP associated
 // with cilium_host on the node.
-func (n *Node) SetCiliumInternalIP(newAddr string) {
+func (n *Node) SetCiliumInternalIP(newAddr net.IP) {
 	n.setAddress(addressing.NodeCiliumInternalIP, newAddr)
 }
 
 // SetNodeExternalIP sets the NodeExternalIP.
-func (n *Node) SetNodeExternalIP(newAddr string) {
+func (n *Node) SetNodeExternalIP(newAddr net.IP) {
 	n.setAddress(addressing.NodeExternalIP, newAddr)
 }
 
 // SetNodeInternalIP sets the NodeInternalIP.
-func (n *Node) SetNodeInternalIP(newAddr string) {
+func (n *Node) SetNodeInternalIP(newAddr net.IP) {
 	n.setAddress(addressing.NodeInternalIP, newAddr)
 }
 
@@ -385,28 +416,21 @@ func (n *Node) RemoveAddresses(typ addressing.AddressType) {
 	n.IPAddresses = newAddresses
 }
 
-func (n *Node) setAddress(typ addressing.AddressType, newIP string) {
+func (n *Node) setAddress(typ addressing.AddressType, newIP net.IP) {
 	newAddr := Address{Type: typ, IP: newIP}
 
-	if newIP == "" {
+	if newIP == nil {
 		n.RemoveAddresses(typ)
 		return
 	}
 
-	inIP, err := netip.ParseAddr(newIP)
-	if err != nil {
-		return
-	}
+	ipv6 := newIP.To4() == nil
 	// Try first to replace an existing address with same type
 	for i, addr := range n.IPAddresses {
-		nodeIP, err := netip.ParseAddr(addr.IP)
-		if err != nil {
-			return
-		}
 		if addr.Type != typ {
 			continue
 		}
-		if inIP.Is4() != nodeIP.Is4() {
+		if ipv6 != (addr.IP.To4() == nil) {
 			// Don't replace if address family is different.
 			continue
 		}
@@ -417,20 +441,16 @@ func (n *Node) setAddress(typ addressing.AddressType, newIP string) {
 
 }
 
-func (n *Node) GetIPByType(addrType addressing.AddressType, ipv6 bool) string {
+func (n *Node) GetIPByType(addrType addressing.AddressType, ipv6 bool) net.IP {
 	for _, addr := range n.IPAddresses {
 		if addr.Type != addrType {
 			continue
 		}
-		ip, err := netip.ParseAddr(addr.IP)
-		if err != nil {
-			return ""
-		}
-		if is4 := ip.Is4(); (!ipv6 && is4) || (ipv6 && !is4) {
+		if is4 := addr.IP.To4() != nil; (!ipv6 && is4) || (ipv6 && !is4) {
 			return addr.IP
 		}
 	}
-	return ""
+	return nil
 }
 
 func (n *Node) getPrimaryAddress() *models.NodeAddressing {
@@ -446,11 +466,11 @@ func (n *Node) getPrimaryAddress() *models.NodeAddressing {
 	}
 
 	var v4Str, v6Str string
-	if v4 != "" {
-		v4Str = v4
+	if v4 != nil {
+		v4Str = v4.String()
 	}
-	if v6 != "" {
-		v6Str = v6
+	if v6 != nil {
+		v6Str = v6.String()
 	}
 
 	return &models.NodeAddressing{
@@ -468,17 +488,20 @@ func (n *Node) getPrimaryAddress() *models.NodeAddressing {
 }
 
 func (n *Node) isPrimaryAddress(addr Address, ipv4 bool) bool {
-	return addr.IP == n.GetNodeIP(!ipv4)
+	return addr.IP.String() == n.GetNodeIP(!ipv4).String()
 }
 
 func (n *Node) getSecondaryAddresses() []*models.NodeAddressingElement {
 	result := []*models.NodeAddressingElement{}
 
 	for _, addr := range n.IPAddresses {
-		ipv4 := pkgip.Is4(addr.IP)
+		ipv4 := false
+		if addr.IP.To4() != nil {
+			ipv4 = true
+		}
 		if !n.isPrimaryAddress(addr, ipv4) {
 			result = append(result, &models.NodeAddressingElement{
-				IP: addr.IP,
+				IP: addr.IP.String(),
 			})
 		}
 	}
@@ -487,16 +510,16 @@ func (n *Node) getSecondaryAddresses() []*models.NodeAddressingElement {
 }
 
 func (n *Node) getHealthAddresses() *models.NodeAddressing {
-	if n.IPv4HealthIP == "" && n.IPv6HealthIP == "" {
+	if n.IPv4HealthIP == nil && n.IPv6HealthIP == nil {
 		return nil
 	}
 
 	var v4Str, v6Str string
-	if n.IPv4HealthIP != "" {
-		v4Str = n.IPv4HealthIP
+	if n.IPv4HealthIP != nil {
+		v4Str = n.IPv4HealthIP.String()
 	}
-	if n.IPv6HealthIP != "" {
-		v6Str = n.IPv6HealthIP
+	if n.IPv6HealthIP != nil {
+		v6Str = n.IPv6HealthIP.String()
 	}
 
 	return &models.NodeAddressing{
@@ -512,16 +535,16 @@ func (n *Node) getHealthAddresses() *models.NodeAddressing {
 }
 
 func (n *Node) getIngressAddresses() *models.NodeAddressing {
-	if n.IPv4IngressIP == "" && n.IPv6IngressIP == "" {
+	if n.IPv4IngressIP == nil && n.IPv6IngressIP == nil {
 		return nil
 	}
 
 	var v4Str, v6Str string
-	if n.IPv4IngressIP != "" {
-		v4Str = n.IPv4IngressIP
+	if n.IPv4IngressIP != nil {
+		v4Str = n.IPv4IngressIP.String()
 	}
-	if n.IPv6IngressIP != "" {
-		v6Str = n.IPv6IngressIP
+	if n.IPv6IngressIP != nil {
+		v6Str = n.IPv6IngressIP.String()
 	}
 
 	return &models.NodeAddressing{

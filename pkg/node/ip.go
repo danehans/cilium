@@ -3,12 +3,12 @@
 
 package node
 
-import "net"
+import "net/netip"
 
-var excludedIPs []net.IP
+var excludedIPs []netip.Addr
 
 // GetExcludedIPs returns a list of IPs from netdevices that Cilium
 // needs to exclude to operate
-func GetExcludedIPs() []net.IP {
+func GetExcludedIPs() []netip.Addr {
 	return excludedIPs
 }

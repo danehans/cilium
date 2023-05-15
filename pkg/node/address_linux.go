@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Authors of Cilium
 
-//go:build !darwin
-
 package node
 
 import (
 	"fmt"
-	"net"
+	"net/netip"
 	"sort"
 
 	"github.com/sirupsen/logrus"
@@ -17,7 +15,7 @@ import (
 	"github.com/cilium/cilium/pkg/ip"
 )
 
-func firstGlobalAddr(intf string, preferredIP net.IP, family int, preferPublic bool) (net.IP, error) {
+func firstGlobalAddr(intf, preferredIP string, family int, preferPublic bool) (string, error) {
 	var link netlink.Link
 	var ipLen int
 	var err error
@@ -35,14 +33,14 @@ func firstGlobalAddr(intf string, preferredIP net.IP, family int, preferPublic b
 		if err != nil {
 			link = nil
 		} else {
-			ipsToExclude = []net.IP{}
+			ipsToExclude = []netip.Addr{}
 		}
 	}
 
 retryInterface:
-	addr, err := netlink.AddrList(link, family)
+	addrs, err := netlink.AddrList(link, family)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
 retryScope:
@@ -50,26 +48,37 @@ retryScope:
 	ipsPrivate := []netlink.Addr{}
 	hasPreferred := false
 
-	for _, a := range addr {
-		if a.Scope > linkScopeMax {
+	for _, addr := range addrs {
+		if addr.Scope > linkScopeMax {
 			continue
 		}
-		if ip.ListContainsIP(ipsToExclude, a.IP) {
+		a, ok := ip.AddrFromIP(addr.IP)
+		if !ok {
 			continue
 		}
-		if len(a.IP) < ipLen {
+		if ip.ListContainsIPAddr(ipsToExclude, a) {
 			continue
 		}
-		isPreferredIP := a.IP.Equal(preferredIP)
-		if a.Flags&unix.IFA_F_SECONDARY > 0 && !isPreferredIP {
+		if a.BitLen() < ipLen {
+			continue
+		}
+		parsedIP, err := netip.ParseAddr(preferredIP)
+		if err != nil {
+			continue
+		}
+		isPreferredIP := false
+		if res := a.Compare(parsedIP); res == 0 {
+			isPreferredIP = true
+		}
+		if addr.Flags&unix.IFA_F_SECONDARY > 0 && !isPreferredIP {
 			// Skip secondary addresses if they're not the preferredIP
 			continue
 		}
 
-		if ip.IsPublicAddr(a.IP) {
-			ipsPublic = append(ipsPublic, a)
+		if ip.IsPublicNetIPAddr(&a) {
+			ipsPublic = append(ipsPublic, addr)
 		} else {
-			ipsPrivate = append(ipsPrivate, a)
+			ipsPrivate = append(ipsPrivate, addr)
 		}
 		// If the IP is the same as the preferredIP, that
 		// means that maybe it is restored from node_config.h,
@@ -85,7 +94,7 @@ retryScope:
 	}
 
 	if len(ipsPublic) != 0 {
-		if hasPreferred && ip.IsPublicAddr(preferredIP) {
+		if hasPreferred && ip.IsPublicNetIPAddr(preferredIP) {
 			return preferredIP, nil
 		}
 
@@ -154,19 +163,19 @@ retryScope:
 // universe scope again (and then falling back to reduced scope).
 //
 // In case none of the above helped, we bail out with error.
-func firstGlobalV4Addr(intf string, preferredIP net.IP, preferPublic bool) (net.IP, error) {
+func firstGlobalV4Addr(intf, preferredIP string, preferPublic bool) (string, error) {
 	return firstGlobalAddr(intf, preferredIP, netlink.FAMILY_V4, preferPublic)
 }
 
 // firstGlobalV6Addr returns first IPv6 global IP of an interface, see
 // firstGlobalV4Addr for more details.
-func firstGlobalV6Addr(intf string, preferredIP net.IP, preferPublic bool) (net.IP, error) {
+func firstGlobalV6Addr(intf, preferredIP string, preferPublic bool) (string, error) {
 	return firstGlobalAddr(intf, preferredIP, netlink.FAMILY_V6, preferPublic)
 }
 
 // getCiliumHostIPsFromNetDev returns the first IPv4 link local and returns
 // it
-func getCiliumHostIPsFromNetDev(devName string) (ipv4GW, ipv6Router net.IP) {
+func getCiliumHostIPsFromNetDev(devName string) (ipv4GW, ipv6Router string) {
 	hostDev, err := netlink.LinkByName(devName)
 	if err != nil {
 		return nil, nil
