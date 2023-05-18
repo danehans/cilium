@@ -6,6 +6,7 @@ package egressgateway
 import (
 	"context"
 	"net"
+	"net/netip"
 	"testing"
 
 	. "github.com/cilium/checkmate"
@@ -21,6 +22,7 @@ import (
 	"github.com/cilium/cilium/pkg/hive/cell"
 	"github.com/cilium/cilium/pkg/identity"
 	"github.com/cilium/cilium/pkg/identity/cache"
+	"github.com/cilium/cilium/pkg/ip"
 	"github.com/cilium/cilium/pkg/k8s"
 	v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	slimv1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/meta/v1"
@@ -85,9 +87,9 @@ type ipRule struct {
 }
 
 type parsedIPRule struct {
-	sourceIP   net.IP
-	destCIDR   net.IPNet
-	egressIP   net.IPNet
+	sourceIP   netip.Addr
+	destCIDR   netip.Prefix
+	egressIP   netip.Prefix
 	ifaceIndex int
 }
 
@@ -99,10 +101,10 @@ type egressRule struct {
 }
 
 type parsedEgressRule struct {
-	sourceIP  net.IP
-	destCIDR  net.IPNet
-	egressIP  net.IP
-	gatewayIP net.IP
+	sourceIP  netip.Addr
+	destCIDR  netip.Prefix
+	egressIP  netip.Addr
+	gatewayIP netip.Addr
 }
 
 // Hook up gocheck into the "go test" runner.
@@ -426,7 +428,7 @@ func destroyTestInterface(iface string) error {
 func cleanupPolicies(policyMap egressmap.PolicyMap) {
 	for _, ep := range []string{ep1IP, ep2IP} {
 		pr := parseEgressRule(ep, destCIDR, zeroIP4, zeroIP4)
-		policyMap.Delete(pr.sourceIP, pr.destCIDR)
+		policyMap.Delete(pr.sourceIP.AsSlice(), *ip.PrefixToIPNet(pr.destCIDR))
 	}
 }
 
@@ -444,12 +446,12 @@ func newCiliumNode(name, nodeIP string, nodeLabels map[string]string) nodeTypes.
 }
 
 func newEgressPolicyConfigWithNodeSelector(policyName string, labels map[string]string, destinationCIDR string, excludedCIDRs []string, selector *v1.LabelSelector, iface string) PolicyConfig {
-	_, parsedDestinationCIDR, _ := net.ParseCIDR(destinationCIDR)
+	dstPrefix, _ := netip.ParsePrefix(destinationCIDR)
 
-	parsedExcludedCIDRs := []*net.IPNet{}
+	excludedPrefixes := []*netip.Prefix{}
 	for _, excludedCIDR := range excludedCIDRs {
-		_, parsedExcludedCIDR, _ := net.ParseCIDR(excludedCIDR)
-		parsedExcludedCIDRs = append(parsedExcludedCIDRs, parsedExcludedCIDR)
+		excludedPrefix, _ := netip.ParsePrefix(excludedCIDR)
+		excludedPrefixes = append(excludedPrefixes, &excludedPrefix)
 	}
 
 	return PolicyConfig{
@@ -463,8 +465,8 @@ func newEgressPolicyConfigWithNodeSelector(policyName string, labels map[string]
 				},
 			},
 		},
-		dstCIDRs:      []*net.IPNet{parsedDestinationCIDR},
-		excludedCIDRs: parsedExcludedCIDRs,
+		dstCIDRs:      []*netip.Prefix{&dstPrefix},
+		excludedCIDRs: excludedPrefixes,
 		policyGwConfig: &policyGatewayConfig{
 			nodeSelector: api.NewESFromK8sLabelSelector("", selector),
 			iface:        iface,
@@ -504,25 +506,25 @@ func updateEndpointAndIdentity(endpoint *k8sTypes.CiliumEndpoint, oldID *identit
 }
 
 func parseIPRule(sourceIP, destCIDR, egressIP string, ifaceIndex int) parsedIPRule {
-	sip := net.ParseIP(sourceIP)
-	if sip == nil {
+	sip, err := netip.ParseAddr(sourceIP)
+	if err != nil {
 		panic("Invalid source IP")
 	}
 
-	_, dc, err := net.ParseCIDR(destCIDR)
+	dc, err := netip.ParsePrefix(destCIDR)
 	if err != nil {
 		panic("Invalid destination CIDR")
 	}
 
-	eip, ecidr, _ := net.ParseCIDR(egressIP)
-	if eip == nil {
+	ecidr, err := netip.ParsePrefix(egressIP)
+	if err != nil {
 		panic("Invalid egress IP")
 	}
 
 	return parsedIPRule{
 		sourceIP:   sip,
-		destCIDR:   *dc,
-		egressIP:   net.IPNet{IP: eip, Mask: ecidr.Mask},
+		destCIDR:   dc,
+		egressIP:   ecidr,
 		ifaceIndex: ifaceIndex,
 	}
 }
@@ -541,10 +543,18 @@ func assertIPRules(c *C, rules []ipRule) {
 nextRule:
 	for _, rule := range parsedRules {
 		for _, installedRule := range installedRules {
-			if rule.sourceIP.Equal(installedRule.Src.IP) && rule.destCIDR.String() == installedRule.Dst.String() &&
+			ruleSrcIP, ok := ip.AddrFromIP(installedRule.Src.IP)
+			if !ok {
+				continue nextRule
+			}
+			if rule.sourceIP.Compare(ruleSrcIP) == 0 && rule.destCIDR.String() == installedRule.Dst.String() &&
 				rule.ifaceIndex == installedRule.Table-linux_defaults.RouteTableEgressGatewayInterfacesOffset {
 
-				assertIPRoutes(c, rule.egressIP, rule.ifaceIndex)
+				egressPrefix, err := netip.ParsePrefix(rule.egressIP.String())
+				if err != nil {
+					continue nextRule
+				}
+				assertIPRoutes(c, egressPrefix, rule.ifaceIndex)
 				continue nextRule
 			}
 		}
@@ -555,7 +565,11 @@ nextRule:
 nextInstalledRule:
 	for _, installedRule := range installedRules {
 		for _, rule := range parsedRules {
-			if rule.sourceIP.Equal(installedRule.Src.IP) && rule.destCIDR.String() == installedRule.Dst.String() &&
+			ruleSrcIP, ok := ip.AddrFromIP(installedRule.Src.IP)
+			if !ok {
+				continue nextInstalledRule
+			}
+			if rule.sourceIP.Compare(ruleSrcIP) == 0 && rule.destCIDR.String() == installedRule.Dst.String() &&
 				rule.ifaceIndex == installedRule.Table-linux_defaults.RouteTableEgressGatewayInterfacesOffset {
 				continue nextInstalledRule
 			}
@@ -565,13 +579,13 @@ nextInstalledRule:
 	}
 }
 
-func assertIPRoutes(c *C, egressIP net.IPNet, ifaceIndex int) {
+func assertIPRoutes(c *C, egressIP netip.Prefix, ifaceIndex int) {
 	eniGatewayIP := getFirstIPInHostRange(egressIP)
 	routingTableIdx := egressGatewayRoutingTableIdx(ifaceIndex)
 
 	route, err := netlink.RouteListFiltered(netlink.FAMILY_V4, &netlink.Route{
 		LinkIndex: ifaceIndex,
-		Dst:       &net.IPNet{IP: eniGatewayIP, Mask: net.CIDRMask(32, 32)},
+		Dst:       &net.IPNet{IP: eniGatewayIP.AsSlice(), Mask: net.CIDRMask(32, 32)},
 		Scope:     netlink.SCOPE_LINK,
 		Table:     routingTableIdx,
 	}, netlink.RT_FILTER_OIF|netlink.RT_FILTER_DST|netlink.RT_FILTER_SCOPE|netlink.RT_FILTER_TABLE)
@@ -582,7 +596,7 @@ func assertIPRoutes(c *C, egressIP net.IPNet, ifaceIndex int) {
 
 	route, err = netlink.RouteListFiltered(netlink.FAMILY_V4, &netlink.Route{
 		Table: routingTableIdx,
-		Gw:    eniGatewayIP,
+		Gw:    eniGatewayIP.AsSlice(),
 	}, netlink.RT_FILTER_DST|netlink.RT_FILTER_TABLE|netlink.RT_FILTER_GW)
 
 	if err != nil || route == nil {
@@ -591,29 +605,29 @@ func assertIPRoutes(c *C, egressIP net.IPNet, ifaceIndex int) {
 }
 
 func parseEgressRule(sourceIP, destCIDR, egressIP, gatewayIP string) parsedEgressRule {
-	sip := net.ParseIP(sourceIP)
-	if sip == nil {
+	sip, err := netip.ParseAddr(sourceIP)
+	if err != nil {
 		panic("Invalid source IP")
 	}
 
-	_, dc, err := net.ParseCIDR(destCIDR)
+	dc, err := netip.ParsePrefix(destCIDR)
 	if err != nil {
 		panic("Invalid destination CIDR")
 	}
 
-	eip := net.ParseIP(egressIP)
-	if eip == nil {
+	eip, err := netip.ParseAddr(egressIP)
+	if err != nil {
 		panic("Invalid egress IP")
 	}
 
-	gip := net.ParseIP(gatewayIP)
-	if gip == nil {
+	gip, err := netip.ParseAddr(gatewayIP)
+	if err != nil {
 		panic("Invalid gateway IP")
 	}
 
 	return parsedEgressRule{
 		sourceIP:  sip,
-		destCIDR:  *dc,
+		destCIDR:  dc,
 		egressIP:  eip,
 		gatewayIP: gip,
 	}
@@ -626,17 +640,17 @@ func assertEgressRules(c *C, policyMap egressmap.PolicyMap, rules []egressRule) 
 	}
 
 	for _, r := range parsedRules {
-		policyVal, err := policyMap.Lookup(r.sourceIP, r.destCIDR)
+		policyVal, err := policyMap.Lookup(r.sourceIP.AsSlice(), *ip.PrefixToIPNet(r.destCIDR))
 		c.Assert(err, IsNil)
 
-		c.Assert(policyVal.GetEgressIP().Equal(r.egressIP), Equals, true)
-		c.Assert(policyVal.GetGatewayIP().Equal(r.gatewayIP), Equals, true)
+		c.Assert(policyVal.GetEgressIP().Equal(r.egressIP.AsSlice()), Equals, true)
+		c.Assert(policyVal.GetGatewayIP().Equal(r.gatewayIP.AsSlice()), Equals, true)
 	}
 
 	policyMap.IterateWithCallback(
 		func(key *egressmap.EgressPolicyKey4, val *egressmap.EgressPolicyVal4) {
 			for _, r := range parsedRules {
-				if key.Match(r.sourceIP, &r.destCIDR) && val.Match(r.egressIP, r.gatewayIP) {
+				if key.Match(r.sourceIP.AsSlice(), ip.PrefixToIPNet(r.destCIDR)) && val.Match(r.egressIP.AsSlice(), r.gatewayIP.AsSlice()) {
 					return
 				}
 			}

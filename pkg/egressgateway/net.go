@@ -6,56 +6,60 @@ package egressgateway
 import (
 	"fmt"
 	"net"
+	"net/netip"
 
 	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
 
 	"github.com/cilium/cilium/pkg/datapath/linux/linux_defaults"
 	"github.com/cilium/cilium/pkg/datapath/linux/route"
+	iputils "github.com/cilium/cilium/pkg/ip"
 )
 
 var zeroIPv4Net = &net.IPNet{IP: net.ParseIP("0.0.0.0"), Mask: net.CIDRMask(0, 32)}
 
-func getIfaceFirstIPv4Address(ifaceName string) (net.IPNet, int, error) {
+func getIfaceFirstIPv4Address(ifaceName string) (netip.Prefix, int, error) {
 	dev, err := netlink.LinkByName(ifaceName)
 	if err != nil {
-		return net.IPNet{}, 0, err
+		return netip.Prefix{}, 0, err
 	}
 
 	addrs, err := netlink.AddrList(dev, netlink.FAMILY_V4)
 	if err != nil {
-		return net.IPNet{}, 0, err
+		return netip.Prefix{}, 0, err
 	}
 
 	for _, addr := range addrs {
 		if addr.IP.To4() != nil {
-			return *addr.IPNet, dev.Attrs().Index, nil
+			prefix, _ := netip.ParsePrefix(addr.String())
+			return prefix, dev.Attrs().Index, nil
 		}
 	}
 
-	return net.IPNet{}, 0, fmt.Errorf("no IPv4 address assigned to interface")
+	return netip.Prefix{}, 0, fmt.Errorf("no IPv4 address assigned to interface")
 }
 
-func getIfaceWithIPv4Address(ip net.IP) (string, int, net.IPMask, error) {
+func getIfaceWithIPv4Address(ip netip.Addr) (string, int, netip.Prefix, error) {
 	links, err := netlink.LinkList()
 	if err != nil {
-		return "", 0, nil, err
+		return "", 0, netip.Prefix{}, err
 	}
 
 	for _, l := range links {
 		addrs, err := netlink.AddrList(l, netlink.FAMILY_V4)
 		if err != nil {
-			return "", 0, nil, err
+			return "", 0, netip.Prefix{}, err
 		}
 
 		for _, addr := range addrs {
-			if addr.IP.Equal(ip) {
-				return l.Attrs().Name, l.Attrs().Index, addr.Mask, nil
+			if addr.IP.Equal(ip.AsSlice()) {
+				prefix, _ := netip.ParsePrefix(addr.String())
+				return l.Attrs().Name, l.Attrs().Index, prefix, nil
 			}
 		}
 	}
 
-	return "", 0, nil, fmt.Errorf("no interface with %s IPv4 assigned to", ip)
+	return "", 0, netip.Prefix{}, fmt.Errorf("no interface with %s IPv4 assigned to", ip)
 }
 
 // egressGatewayRoutingTableIdx returns the index of the routing table that
@@ -90,13 +94,13 @@ func listEgressIpRules() ([]netlink.Rule, error) {
 	return rules, nil
 }
 
-func addEgressIpRule(endpointIP net.IP, dstCIDR *net.IPNet, egressIP net.IP, ifaceIndex int) error {
+func addEgressIpRule(endpointIP netip.Addr, dstCIDR netip.Prefix, egressIP netip.Addr, ifaceIndex int) error {
 	routingTableIdx := egressGatewayRoutingTableIdx(ifaceIndex)
 
 	ipRule := route.Rule{
 		Priority: linux_defaults.RulePriorityEgressGateway,
-		From:     &net.IPNet{IP: endpointIP, Mask: net.CIDRMask(32, 32)},
-		To:       dstCIDR,
+		From:     &net.IPNet{IP: endpointIP.AsSlice(), Mask: net.CIDRMask(32, 32)},
+		To:       iputils.PrefixToIPNet(dstCIDR),
 		Table:    routingTableIdx,
 		Protocol: linux_defaults.RTProto,
 	}
@@ -104,21 +108,16 @@ func addEgressIpRule(endpointIP net.IP, dstCIDR *net.IPNet, egressIP net.IP, ifa
 	return route.ReplaceRule(ipRule)
 }
 
-func getFirstIPInHostRange(ip net.IPNet) net.IP {
-	out := make(net.IP, net.IPv4len)
-	copy(out, ip.IP.To4())
-	out = out.Mask(ip.Mask)
-	out[3] += 1
-
-	return out
+func getFirstIPInHostRange(prefix netip.Prefix) netip.Addr {
+	return prefix.Addr().Next()
 }
 
-func addEgressIpRoutes(egressIP net.IPNet, ifaceIndex int) error {
+func addEgressIpRoutes(egressIP netip.Prefix, ifaceIndex int) error {
 	routingTableIdx := egressGatewayRoutingTableIdx(ifaceIndex)
 
 	// The gateway for a subnet and VPC should always be the first IP of the
 	// host address range.
-	eniGatewayIP := getFirstIPInHostRange(egressIP)
+	eniGatewayIP := getFirstIPInHostRange(egressIP).AsSlice()
 
 	// Nexthop route to the VPC or subnet gateway
 	if err := netlink.RouteReplace(&netlink.Route{

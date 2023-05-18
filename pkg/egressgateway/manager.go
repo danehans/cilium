@@ -6,7 +6,7 @@ package egressgateway
 import (
 	"context"
 	"fmt"
-	"net"
+	"net/netip"
 	"sort"
 
 	"github.com/sirupsen/logrus"
@@ -19,6 +19,7 @@ import (
 	"github.com/cilium/cilium/pkg/hive/cell"
 	"github.com/cilium/cilium/pkg/identity"
 	identityCache "github.com/cilium/cilium/pkg/identity/cache"
+	"github.com/cilium/cilium/pkg/ip"
 	"github.com/cilium/cilium/pkg/k8s"
 	k8sTypes "github.com/cilium/cilium/pkg/k8s/types"
 	"github.com/cilium/cilium/pkg/labels"
@@ -34,10 +35,10 @@ var (
 	log = logging.DefaultLogger.WithField(logfields.LogSubsys, "egressgateway")
 	// GatewayNotFoundIPv4 is a special IP value used as gatewayIP in the BPF policy
 	// map to indicate no gateway was found for the given policy
-	GatewayNotFoundIPv4 = net.ParseIP("0.0.0.0")
+	GatewayNotFoundIPv4, _ = netip.ParseAddr("0.0.0.0")
 	// ExcludedCIDRIPv4 is a special IP value used as gatewayIP in the BPF policy map
 	// to indicate the entry is for an excluded CIDR and should skip egress gateway
-	ExcludedCIDRIPv4 = net.ParseIP("0.0.0.1")
+	ExcludedCIDRIPv4, _ = netip.ParseAddr("0.0.0.1")
 )
 
 // Cell provides a [Manager] for consumption with hive.
@@ -344,15 +345,15 @@ func (manager *Manager) updatePoliciesBySourceIP() {
 // - the given endpoint
 // - the destination CIDR
 // - a boolean value indicating if the CIDR belongs to the excluded ones
-// - the gatewayConfig of the  policy
+// - the gatewayConfig of the policy
 //
 // This method returns true whenever the f callback matches one of the endpoint
 // and CIDR tuples (i.e. whenever one callback invocation returns true)
-func (manager *Manager) policyMatches(sourceIP net.IP, f func(net.IP, *net.IPNet, bool, *gatewayConfig) bool) bool {
+func (manager *Manager) policyMatches(sourceIP netip.Addr, f func(netip.Addr, *netip.Prefix, bool, *gatewayConfig) bool) bool {
 	for _, policy := range manager.policyConfigsBySourceIP[sourceIP.String()] {
 		for _, ep := range policy.matchedEndpoints {
 			for _, endpointIP := range ep.ips {
-				if !endpointIP.Equal(sourceIP) {
+				if endpointIP.Compare(sourceIP) != 0 {
 					continue
 				}
 
@@ -390,17 +391,17 @@ func (manager *Manager) policyMatches(sourceIP net.IP, f func(net.IP, *net.IPNet
 // The callback f takes as arguments:
 // - the given endpoint
 // - the destination CIDR
-// - the gatewayConfig of the  policy
+// - the gatewayConfig of the policy
 //
 // This method returns true whenever the f callback matches one of the endpoint
 // and CIDR tuples (i.e. whenever one callback invocation returns true)
-func (manager *Manager) policyMatchesMinusExcludedCIDRs(sourceIP net.IP, f func(net.IP, *net.IPNet, *gatewayConfig) bool) bool {
+func (manager *Manager) policyMatchesMinusExcludedCIDRs(sourceIP netip.Addr, f func(netip.Addr, *netip.Prefix, *gatewayConfig) bool) bool {
 	for _, policy := range manager.policyConfigsBySourceIP[sourceIP.String()] {
 		cidrs := policy.destinationMinusExcludedCIDRs()
 
 		for _, ep := range policy.matchedEndpoints {
 			for _, endpointIP := range ep.ips {
-				if !endpointIP.Equal(sourceIP) {
+				if endpointIP.Compare(sourceIP) != 0 {
 					continue
 				}
 
@@ -427,7 +428,7 @@ func (manager *Manager) addMissingIpRulesAndRoutes(isRetry bool) (shouldRetry bo
 		return false
 	}
 
-	addIPRulesAndRoutesForConfig := func(endpointIP net.IP, dstCIDR *net.IPNet, gwc *gatewayConfig) {
+	addIPRulesAndRoutesForConfig := func(endpointIP netip.Addr, dstCIDR *netip.Prefix, gwc *gatewayConfig) {
 		if !gwc.localNodeConfiguredAsGateway {
 			return
 		}
@@ -435,11 +436,11 @@ func (manager *Manager) addMissingIpRulesAndRoutes(isRetry bool) (shouldRetry bo
 		logger := log.WithFields(logrus.Fields{
 			logfields.SourceIP:        endpointIP,
 			logfields.DestinationCIDR: dstCIDR.String(),
-			logfields.EgressIP:        gwc.egressIP.IP,
+			logfields.EgressIP:        gwc.egressIP.Addr(),
 			logfields.LinkIndex:       gwc.ifaceIndex,
 		})
 
-		if err := addEgressIpRule(endpointIP, dstCIDR, gwc.egressIP.IP, gwc.ifaceIndex); err != nil {
+		if err := addEgressIpRule(endpointIP, *dstCIDR, gwc.egressIP.Addr(), gwc.ifaceIndex); err != nil {
 			if isRetry {
 				logger.WithError(err).Warn("Can't add IP rule")
 			} else {
@@ -476,7 +477,7 @@ func (manager *Manager) removeUnusedIpRulesAndRoutes() {
 	// Delete all IP rules that don't have a matching egress gateway rule
 nextIpRule:
 	for _, ipRule := range ipRules {
-		matchFunc := func(endpointIP net.IP, dstCIDR *net.IPNet, gwc *gatewayConfig) bool {
+		matchFunc := func(endpointIP netip.Addr, dstCIDR *netip.Prefix, gwc *gatewayConfig) bool {
 			if !manager.installRoutes {
 				return false
 			}
@@ -491,7 +492,7 @@ nextIpRule:
 			return ipRule.Dst.String() == dstCIDR.String()
 		}
 
-		if manager.policyMatchesMinusExcludedCIDRs(ipRule.Src.IP, matchFunc) {
+		if manager.policyMatchesMinusExcludedCIDRs(ip.MustAddrFromIP(ipRule.Src.IP), matchFunc) {
 			continue nextIpRule
 		}
 
@@ -528,14 +529,21 @@ nextIpRule:
 }
 
 func (manager *Manager) addMissingEgressRules() {
+	logger := log.WithFields(logrus.Fields{})
+
 	egressPolicies := map[egressmap.EgressPolicyKey4]egressmap.EgressPolicyVal4{}
 	manager.policyMap.IterateWithCallback(
 		func(key *egressmap.EgressPolicyKey4, val *egressmap.EgressPolicyVal4) {
 			egressPolicies[*key] = *val
 		})
 
-	addEgressRule := func(endpointIP net.IP, dstCIDR *net.IPNet, excludedCIDR bool, gwc *gatewayConfig) {
-		policyKey := egressmap.NewEgressPolicyKey4(endpointIP, dstCIDR.IP, dstCIDR.Mask)
+	addEgressRule := func(endpointIP netip.Addr, dstPrefix *netip.Prefix, excludedCIDR bool, gwc *gatewayConfig) {
+		dstNet := ip.PrefixToIPNet(*dstPrefix)
+		if dstNet == nil {
+			logger.Infof("invalid cidr %q", dstPrefix)
+			return
+		}
+		policyKey := egressmap.NewEgressPolicyKey4(endpointIP.AsSlice(), dstPrefix.Addr().AsSlice(), dstNet.Mask)
 		policyVal, policyPresent := egressPolicies[policyKey]
 
 		gatewayIP := gwc.gatewayIP
@@ -543,18 +551,20 @@ func (manager *Manager) addMissingEgressRules() {
 			gatewayIP = ExcludedCIDRIPv4
 		}
 
-		if policyPresent && policyVal.Match(gwc.egressIP.IP, gatewayIP) {
+		egressIP := gwc.egressIP.Addr().AsSlice()
+		if policyPresent && policyVal.Match(egressIP, gatewayIP.AsSlice()) {
 			return
 		}
 
 		logger := log.WithFields(logrus.Fields{
 			logfields.SourceIP:        endpointIP,
-			logfields.DestinationCIDR: dstCIDR.String(),
-			logfields.EgressIP:        gwc.egressIP.IP,
+			logfields.DestinationCIDR: dstPrefix.String(),
+			logfields.EgressIP:        egressIP,
 			logfields.GatewayIP:       gatewayIP,
 		})
 
-		if err := manager.policyMap.Update(endpointIP, *dstCIDR, gwc.egressIP.IP, gatewayIP); err != nil {
+		dstCIDR := ip.PrefixToIPNet(*dstPrefix)
+		if err := manager.policyMap.Update(endpointIP.AsSlice(), *dstCIDR, gwc.egressIP.Addr().AsSlice(), gatewayIP.AsSlice()); err != nil {
 			logger.WithError(err).Error("Error applying egress gateway policy")
 		} else {
 			logger.Debug("Egress gateway policy applied")
@@ -569,6 +579,8 @@ func (manager *Manager) addMissingEgressRules() {
 // removeUnusedEgressRules is responsible for removing any entry in the egress policy BPF map which
 // is not baked by an actual k8s CiliumEgressGatewayPolicy.
 func (manager *Manager) removeUnusedEgressRules() {
+	logger := log.WithFields(logrus.Fields{})
+
 	egressPolicies := map[egressmap.EgressPolicyKey4]egressmap.EgressPolicyVal4{}
 	manager.policyMap.IterateWithCallback(
 		func(key *egressmap.EgressPolicyKey4, val *egressmap.EgressPolicyVal4) {
@@ -577,16 +589,27 @@ func (manager *Manager) removeUnusedEgressRules() {
 
 nextPolicyKey:
 	for policyKey, policyVal := range egressPolicies {
-		matchPolicy := func(endpointIP net.IP, dstCIDR *net.IPNet, excludedCIDR bool, gwc *gatewayConfig) bool {
+		matchPolicy := func(endpointIP netip.Addr, dstCIDR *netip.Prefix, excludedCIDR bool, gwc *gatewayConfig) bool {
 			gatewayIP := gwc.gatewayIP
 			if excludedCIDR {
 				gatewayIP = ExcludedCIDRIPv4
 			}
 
-			return policyKey.Match(endpointIP, dstCIDR) && policyVal.Match(gwc.egressIP.IP, gatewayIP)
+			egressNet := ip.PrefixToIPNet(gwc.egressIP)
+			if egressNet == nil {
+				logger.Infof("invalid egress IP address %q", gwc.egressIP)
+				return false
+			}
+
+			return policyKey.Match(endpointIP.AsSlice(), ip.PrefixToIPNet(*dstCIDR)) && policyVal.Match(egressNet.IP, gatewayIP.AsSlice())
 		}
 
-		if manager.policyMatches(policyKey.SourceIP.IP(), matchPolicy) {
+		srcAddr, ok := ip.AddrFromIP(policyKey.SourceIP.IP())
+		if !ok {
+			return
+		}
+
+		if manager.policyMatches(srcAddr, matchPolicy) {
 			continue nextPolicyKey
 		}
 

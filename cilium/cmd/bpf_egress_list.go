@@ -80,10 +80,10 @@ var bpfEgressListCmd = &cobra.Command{
 // This function attempt to translate gatewayIP to special values if they exist
 // or return the IP as a string otherwise.
 func mapGatewayIP(ip net.IP) string {
-	if ip.Equal(egressgateway.GatewayNotFoundIPv4) {
+	if ip.Equal(egressgateway.GatewayNotFoundIPv4.AsSlice()) {
 		return "Not Found"
 	}
-	if ip.Equal(egressgateway.ExcludedCIDRIPv4) {
+	if ip.Equal(egressgateway.ExcludedCIDRIPv4.AsSlice()) {
 		return "Excluded CIDR"
 	}
 	return ip.String()
