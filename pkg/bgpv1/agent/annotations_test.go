@@ -30,7 +30,18 @@ func TestAnnotation(t *testing.T) {
 			key:   "cilium.io/bgp-virtual-router.123",
 			value: "router-id=127.0.0.1",
 			attr: Attributes{
-				RouterID: "127.0.0.1",
+				RouterID:  "127.0.0.1",
+				LocalPort: 179,
+			},
+			asn:   123,
+			error: nil,
+		},
+		{
+			name:  "Test parsing of local-port",
+			key:   "cilium.io/bgp-virtual-router.123",
+			value: "local-port=12345",
+			attr: Attributes{
+				LocalPort: 12345,
 			},
 			asn:   123,
 			error: nil,
@@ -45,6 +56,9 @@ func TestAnnotation(t *testing.T) {
 			}
 			if attr.RouterID != tt.attr.RouterID {
 				t.Fatalf("got: %v, want: %v", attr.RouterID, tt.attr.RouterID)
+			}
+			if attr.LocalPort != tt.attr.LocalPort {
+				t.Fatalf("got: %v, want: %v", attr.LocalPort, tt.attr.LocalPort)
 			}
 			if !errors.Is(err, tt.error) {
 				t.Fatalf("got: %v, want: %v", err, tt.error)

@@ -152,6 +152,9 @@ func parseAnnotation(key string, value string) (int, Attributes, error) {
 	}
 	out.ASN = asn
 
+	// Set the default BGP listening port.
+	out.LocalPort = 179
+
 	// split annotation value into multiple "key=value" formatted attributes.
 	attrs := strings.Split(value, ",")
 	if len(attrs) == 0 {
