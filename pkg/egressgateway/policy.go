@@ -101,7 +101,6 @@ func (config *policyGatewayConfig) selectsNodeAsGateway(node nodeTypes.Node) boo
 
 func (config *PolicyConfig) regenerateGatewayConfig(manager *Manager) {
 	gwc := gatewayConfig{
-		egressIP:  netip.Prefix{},
 		gatewayIP: GatewayNotFoundIPv4,
 	}
 
@@ -130,6 +129,7 @@ func (config *PolicyConfig) regenerateGatewayConfig(manager *Manager) {
 		break
 	}
 
+	log.Infof("gwc egress IP %v after regen", gwc.egressIP)
 	config.gatewayConfig = gwc
 }
 
@@ -142,13 +142,16 @@ func (gwc *gatewayConfig) deriveFromPolicyGatewayConfig(gc *policyGatewayConfig)
 
 	switch {
 	case gc.iface != "":
+		log.Infof("using interface %s from derived gwc", gc.iface)
 		// If the gateway config specifies an interface, use the first IPv4 assigned to that
 		// interface as egress IP
 		gwc.egressIP, gwc.ifaceIndex, err = getIfaceFirstIPv4Address(gc.iface)
 		if err != nil {
 			return fmt.Errorf("failed to retrieve IPv4 address for egress interface: %w", err)
 		}
-	case gc.egressIP.IsValid() && (gc.egressIP.Is4() || gc.egressIP.Is6()):
+		log.Infof("gwc egress IP %v from iface %d", gwc.egressIP, gwc.ifaceIndex)
+	case gc.egressIP != netip.Addr{}:
+		log.Infof("gwc specs an egress ip %v, so use it", gc.egressIP)
 		// If the gateway config specifies an egress IP, use the interface with that IP as egress
 		// interface
 		gwc.egressIP = netip.PrefixFrom(gc.egressIP, gc.egressIP.BitLen())
@@ -157,6 +160,7 @@ func (gwc *gatewayConfig) deriveFromPolicyGatewayConfig(gc *policyGatewayConfig)
 			return fmt.Errorf("failed to retrieve interface with egress IP: %w", err)
 		}
 	default:
+		log.Info("gwc doesn't spec an egress ip or iface, so use iface with def route")
 		// If the gateway config doesn't specify any egress IP or interface, use the
 		// interface with the IPv4 default route
 		iface, err := route.NodeDeviceWithDefaultRoute(true, false)
@@ -171,6 +175,7 @@ func (gwc *gatewayConfig) deriveFromPolicyGatewayConfig(gc *policyGatewayConfig)
 		}
 	}
 
+	log.Info("local node acting as gw")
 	gwc.localNodeConfiguredAsGateway = true
 
 	return nil
@@ -280,7 +285,11 @@ func ParseCEGP(cegp *v2.CiliumEgressGatewayPolicy) (*PolicyConfig, error) {
 		return nil, fmt.Errorf("CiliumEgressGatewayPolicy's gateway configuration can't specify both an interface and an egress IP")
 	}
 
-	egressIP, _ := netip.ParseAddr(egressGateway.EgressIP)
+	egressIP, err := netip.ParseAddr(egressGateway.EgressIP)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse egress gateway IP %s: %w", egressGateway.EgressIP, err)
+	}
+
 	policyGwc := &policyGatewayConfig{
 		nodeSelector: api.NewESFromK8sLabelSelector("", egressGateway.NodeSelector),
 		iface:        egressGateway.Interface,

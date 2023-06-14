@@ -42,6 +42,7 @@ func getEndpointMetadata(endpoint *k8sTypes.CiliumEndpoint, identityLabels label
 		if pair.IPV4 != "" {
 			ip, err := netip.ParseAddr(pair.IPV4)
 			if err != nil || !ip.Is4() {
+				log.Errorf("failed to parse IPV4 pair: %v", err)
 				continue
 			}
 			ipv4s = append(ipv4s, ip)

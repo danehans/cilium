@@ -451,6 +451,7 @@ func (manager *Manager) addMissingIpRulesAndRoutes(isRetry bool) (shouldRetry bo
 			logger.Debug("Added IP rule")
 		}
 
+		logger.Infof("addMissingIpRulesAndRoutes() gwc egress IP %v and interface %d", gwc.egressIP, gwc.ifaceIndex)
 		if err := addEgressIpRoutes(gwc.egressIP, gwc.ifaceIndex); err != nil {
 			logger.WithError(err).Warn("Can't add IP routes")
 			return
@@ -459,6 +460,7 @@ func (manager *Manager) addMissingIpRulesAndRoutes(isRetry bool) (shouldRetry bo
 	}
 
 	for _, policyConfig := range manager.policyConfigs {
+		log.Infof("policy cfg egress IP %v", policyConfig.gatewayConfig.egressIP)
 		policyConfig.forEachEndpointAndDestination(addIPRulesAndRoutesForConfig)
 	}
 
@@ -529,21 +531,19 @@ nextIpRule:
 }
 
 func (manager *Manager) addMissingEgressRules() {
-	logger := log.WithFields(logrus.Fields{})
-
 	egressPolicies := map[egressmap.EgressPolicyKey4]egressmap.EgressPolicyVal4{}
 	manager.policyMap.IterateWithCallback(
 		func(key *egressmap.EgressPolicyKey4, val *egressmap.EgressPolicyVal4) {
 			egressPolicies[*key] = *val
 		})
 
-	addEgressRule := func(endpointIP netip.Addr, dstPrefix *netip.Prefix, excludedCIDR bool, gwc *gatewayConfig) {
-		dstNet := ip.PrefixToIPNet(*dstPrefix)
+	addEgressRule := func(endpointIP netip.Addr, dstCIDR *netip.Prefix, excludedCIDR bool, gwc *gatewayConfig) {
+		dstNet := ip.PrefixToIPNet(*dstCIDR)
 		if dstNet == nil {
-			logger.Infof("invalid cidr %q", dstPrefix)
+			log.Infof("invalid cidr %q", dstCIDR)
 			return
 		}
-		policyKey := egressmap.NewEgressPolicyKey4(endpointIP.AsSlice(), dstPrefix.Addr().AsSlice(), dstNet.Mask)
+		policyKey := egressmap.NewEgressPolicyKey4(endpointIP.AsSlice(), dstCIDR.Addr().AsSlice(), dstNet.Mask)
 		policyVal, policyPresent := egressPolicies[policyKey]
 
 		gatewayIP := gwc.gatewayIP
@@ -558,13 +558,13 @@ func (manager *Manager) addMissingEgressRules() {
 
 		logger := log.WithFields(logrus.Fields{
 			logfields.SourceIP:        endpointIP,
-			logfields.DestinationCIDR: dstPrefix.String(),
+			logfields.DestinationCIDR: dstCIDR.String(),
 			logfields.EgressIP:        egressIP,
 			logfields.GatewayIP:       gatewayIP,
 		})
 
-		dstCIDR := ip.PrefixToIPNet(*dstPrefix)
-		if err := manager.policyMap.Update(endpointIP.AsSlice(), *dstCIDR, gwc.egressIP.Addr().AsSlice(), gatewayIP.AsSlice()); err != nil {
+		dstPrefix := ip.PrefixToIPNet(*dstCIDR)
+		if err := manager.policyMap.Update(endpointIP.AsSlice(), *dstPrefix, gwc.egressIP.Addr().AsSlice(), gatewayIP.AsSlice()); err != nil {
 			logger.WithError(err).Error("Error applying egress gateway policy")
 		} else {
 			logger.Debug("Egress gateway policy applied")
@@ -640,6 +640,7 @@ func (manager *Manager) reconcile(e eventType) {
 
 	switch e {
 	case eventUpdateEndpoint, eventDeleteEndpoint:
+		log.Info("Received endpoint update event")
 		manager.updatePoliciesMatchedEndpointIDs()
 		manager.updatePoliciesBySourceIP()
 	case eventAddPolicy, eventDeletePolicy:
@@ -653,7 +654,20 @@ func (manager *Manager) reconcile(e eventType) {
 		manager.updatePoliciesBySourceIP()
 	}
 
+	for i, p := range manager.policyConfigs {
+		if p == nil {
+			log.Infof("policy cfg with index %s/%s is nil before regen", i.Namespace, i.Name)
+		}
+		log.Infof("policy cfg with index %s/%s egress IP before regen: %v", i.Namespace, i.Name, p.gatewayConfig.egressIP)
+	}
 	manager.regenerateGatewayConfigs()
+
+	for i, p := range manager.policyConfigs {
+		if p == nil {
+			log.Infof("policy cfg with index %s/%s is nil after regen", i.Namespace, i.Name)
+		}
+		log.Infof("policy cfg with index %s/%s egress IP after regen: %v", i.Namespace, i.Name, p.gatewayConfig.egressIP)
+	}
 
 	shouldRetry := manager.addMissingIpRulesAndRoutes(false)
 	manager.removeUnusedIpRulesAndRoutes()

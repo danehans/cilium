@@ -21,17 +21,30 @@ var zeroIPv4Net = &net.IPNet{IP: net.ParseIP("0.0.0.0"), Mask: net.CIDRMask(0, 3
 func getIfaceFirstIPv4Address(ifaceName string) (netip.Prefix, int, error) {
 	dev, err := netlink.LinkByName(ifaceName)
 	if err != nil {
+		log.Infof("failed to find iface by name %s", ifaceName)
 		return netip.Prefix{}, 0, err
 	}
 
 	addrs, err := netlink.AddrList(dev, netlink.FAMILY_V4)
 	if err != nil {
+		log.Infof("failed to find iface by netlink device %v", dev)
 		return netip.Prefix{}, 0, err
 	}
 
 	for _, addr := range addrs {
 		if addr.IP.To4() != nil {
-			prefix, _ := netip.ParsePrefix(addr.String())
+			a, ok := netip.AddrFromSlice(addr.IP)
+			if !ok {
+				log.Infof("failed to parse IP address %v", addr.IP)
+				return netip.Prefix{}, 0, err
+			}
+			mask, _ := addr.Mask.Size()
+			prefix, err := a.Prefix(mask)
+			if err != nil {
+				log.Infof("failed to parse IP mask %v", addr.Mask)
+				return netip.Prefix{}, 0, err
+			}
+			log.Infof("using prefix %v from IP %v and Mask %v", prefix,addr.IP, addr.Mask)
 			return prefix, dev.Attrs().Index, nil
 		}
 	}
