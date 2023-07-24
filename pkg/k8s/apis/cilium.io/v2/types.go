@@ -465,3 +465,13 @@ func (n *CiliumNode) InstanceID() (instanceID string) {
 	}
 	return
 }
+
+// AllocatedIPAMPools returns the allocated IPAM pools of n. If IPAM pools
+// are unspecified or no allocation pools exist, nil is returned.
+func (n *CiliumNode) AllocatedIPAMPools() []ipamTypes.IPAMPoolAllocation {
+	if n != nil && n.Spec.IPAM.Pools.Allocated != nil {
+		return n.Spec.IPAM.Pools.Allocated
+
+	}
+	return nil
+}

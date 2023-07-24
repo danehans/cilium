@@ -565,6 +565,233 @@ func TestExportPodCIDRReconciler(t *testing.T) {
 	}
 }
 
+func TestPodIPPoolReconciler(t *testing.T) {
+	var table = []struct {
+		// name of the test case.
+		name string
+		// The multi-pool ipam cidrs allocated to the local node, keyed by pool name.
+		pools map[string][]netip.Prefix
+		// The initial selector used by the BGP policy for matching multi-pool ipam cidrs.
+		initSelector *slim_metav1.LabelSelector
+		// The advertised multi-pool ipam cidrs the test begins with.
+		advertised []netip.Prefix
+		// The selector used by the updated BGP policy for matching multi-pool ipam cidrs.
+		updatedSelector *slim_metav1.LabelSelector
+		// The advertised multi-pool ipam cirs the test ends with.
+		updatedAdvertised []netip.Prefix
+	}{
+		{
+			name: "no ipam pool selector",
+			pools: map[string][]netip.Prefix{
+				"test1": {netip.MustParsePrefix("192.168.0.0/24"), netip.MustParsePrefix("192.168.1.0/24")},
+			},
+		},
+		{
+			name: "no matched ipam pools",
+			pools: map[string][]netip.Prefix{
+				"test1": {netip.MustParsePrefix("192.168.0.0/24"), netip.MustParsePrefix("192.168.1.0/24")},
+			},
+			initSelector: &slim_metav1.LabelSelector{
+				MatchLabels: map[string]string{"test1": "192.168.3.0/24"},
+			},
+			advertised: nil,
+			updatedSelector: &slim_metav1.LabelSelector{
+				MatchLabels: map[string]string{"test1": "192.168.4.0/24,192.168.5.0/24"},
+			},
+			updatedAdvertised: nil,
+		},
+		{
+			name: "match one cidr from one ipam pool",
+			pools: map[string][]netip.Prefix{
+				"test1": {netip.MustParsePrefix("192.168.0.0/24"), netip.MustParsePrefix("192.168.1.0/24")},
+			},
+			initSelector: &slim_metav1.LabelSelector{
+				MatchLabels: map[string]string{"test1": "192.168.0.0/24"},
+			},
+			advertised: []netip.Prefix{
+				netip.MustParsePrefix("192.168.0.0/24"),
+			},
+			updatedSelector: &slim_metav1.LabelSelector{
+				MatchLabels: map[string]string{"test1": "192.168.0.0/24,192.168.3.0/24"},
+			},
+			updatedAdvertised: []netip.Prefix{
+				netip.MustParsePrefix("192.168.0.0/24"),
+			},
+		},
+		{
+			name: "match cidrs from multiple ipam pool",
+			pools: map[string][]netip.Prefix{
+				"test1": {netip.MustParsePrefix("192.168.0.0/24"), netip.MustParsePrefix("192.168.1.0/24"), netip.MustParsePrefix("192.168.3.0/24")},
+				"test2": {netip.MustParsePrefix("192.168.4.0/24"), netip.MustParsePrefix("192.168.5.0/24"), netip.MustParsePrefix("192.168.6.0/24")},
+			},
+			initSelector: &slim_metav1.LabelSelector{
+				MatchLabels: map[string]string{"test1": "192.168.0.0/24", "test2": "192.168.4.0/24"},
+			},
+			advertised: []netip.Prefix{
+				netip.MustParsePrefix("192.168.0.0/24"),
+				netip.MustParsePrefix("192.168.2.0/24"),
+			},
+			updatedSelector: &slim_metav1.LabelSelector{
+				MatchLabels: map[string]string{"test1": "192.168.0.0/24,192.168.3.0/24", "test2": "192.168.4.0/24,192.168.6.0/24"},
+			},
+			updatedAdvertised: []netip.Prefix{
+				netip.MustParsePrefix("192.168.0.0/24"),
+				netip.MustParsePrefix("192.168.3.0/24"),
+				netip.MustParsePrefix("192.168.4.0/24"),
+				netip.MustParsePrefix("192.168.6.0/24"),
+			},
+		},
+		{
+			name: "remove one cidr from one ipam pool",
+			pools: map[string][]netip.Prefix{
+				"test1": {netip.MustParsePrefix("192.168.0.0/24"), netip.MustParsePrefix("192.168.1.0/24")},
+			},
+			initSelector: &slim_metav1.LabelSelector{
+				MatchLabels: map[string]string{"test1": "192.168.0.0/24,192.168.3.0/24"},
+			},
+			advertised: []netip.Prefix{
+				netip.MustParsePrefix("192.168.0.0/24"),
+				//netip.MustParsePrefix("192.168.3.0/24"),
+			},
+			updatedSelector: &slim_metav1.LabelSelector{
+				MatchLabels: map[string]string{"test1": "192.168.1.0/24"},
+			},
+			updatedAdvertised: []netip.Prefix{
+				netip.MustParsePrefix("192.168.1.0/24"),
+			},
+		},
+		{
+			name: "match all cidrs from one ipam pool",
+			pools: map[string][]netip.Prefix{
+				"test1": {netip.MustParsePrefix("192.168.0.0/24"), netip.MustParsePrefix("192.168.1.0/24")},
+			},
+			initSelector: &slim_metav1.LabelSelector{
+				MatchLabels: map[string]string{"test1": "192.168.0.0/24"},
+			},
+			advertised: []netip.Prefix{
+				netip.MustParsePrefix("192.168.0.0/24"),
+			},
+			updatedSelector: &slim_metav1.LabelSelector{
+				MatchLabels: map[string]string{"test1": ""},
+			},
+			updatedAdvertised: []netip.Prefix{
+				netip.MustParsePrefix("192.168.0.0/24"),
+				netip.MustParsePrefix("192.168.1.0/24"),
+			},
+		},
+		{
+			name: "invalid cidr in ipam pool selector",
+			pools: map[string][]netip.Prefix{
+				"test1": {netip.MustParsePrefix("192.168.0.0/24"), netip.MustParsePrefix("192.168.1.0/24")},
+			},
+			initSelector: &slim_metav1.LabelSelector{
+				MatchLabels: map[string]string{"test1": "192.168.0.0/24"},
+			},
+			advertised: []netip.Prefix{
+				netip.MustParsePrefix("192.168.0.0/24"),
+			},
+			updatedSelector: &slim_metav1.LabelSelector{
+				MatchLabels: map[string]string{"test1": "192.168.0.0/24,192.168.x.0/24"},
+			},
+			updatedAdvertised: []netip.Prefix{
+				netip.MustParsePrefix("192.168.0.0/24"),
+			},
+		},
+	}
+
+	for _, tt := range table {
+		t.Run(tt.name, func(t *testing.T) {
+			// setup our test server, create a BgpServer, advertise the tt.advertised
+			// networks, and store each returned Advertisement in testSC.PodCIDRAnnouncements
+			srvParams := types.ServerParameters{
+				Global: types.BGPGlobal{
+					ASN:        64125,
+					RouterID:   "127.0.0.1",
+					ListenPort: -1,
+				},
+			}
+			oldc := &v2alpha1api.CiliumBGPVirtualRouter{
+				LocalASN:          64125,
+				PodIPPoolSelector: tt.initSelector,
+				Neighbors:         []v2alpha1api.CiliumBGPNeighbor{},
+			}
+			testSC, err := NewServerWithConfig(context.Background(), srvParams)
+			if err != nil {
+				t.Fatalf("failed to create test bgp server: %v", err)
+			}
+			testSC.Config = oldc
+			for _, cidr := range tt.advertised {
+				advrtResp, err := testSC.Server.AdvertisePath(context.Background(), types.PathRequest{
+					Path: types.NewPathForPrefix(cidr),
+				})
+				if err != nil {
+					t.Fatalf("failed to advertise initial ipam pool routes: %v", err)
+				}
+				testSC.PodIPPoolAnnouncements = append(testSC.PodCIDRAnnouncements, advrtResp.Path)
+			}
+
+			newc := &v2alpha1api.CiliumBGPVirtualRouter{
+				LocalASN:          64125,
+				PodIPPoolSelector: tt.updatedSelector,
+				Neighbors:         []v2alpha1api.CiliumBGPNeighbor{},
+			}
+
+			params := ReconcileParams{
+				CurrentServer: testSC,
+				DesiredConfig: newc,
+				Node: &node.LocalNode{
+					Node: nodeTypes.Node{
+						IPAMAllocPools: tt.pools,
+					},
+				},
+			}
+
+			podIPPoolReconciler := NewPodIPPoolReconciler().Reconciler
+
+			err = podIPPoolReconciler.Reconcile(context.Background(), params)
+			if err != nil {
+				t.Fatalf("failed to reconcile new ipam pool advertisements: %v", err)
+			}
+
+			// If we disable exports of pod cidr ensure no advertisements are
+			// still present.
+			if tt.initSelector == nil && len(testSC.PodIPPoolAnnouncements) > 0 {
+				t.Fatal("no ipam pool selector but advertisements still present")
+			}
+
+			log.Printf("%+v %+v", testSC.PodIPPoolAnnouncements, tt.updatedSelector)
+
+			// Ensure we see updated ipam pools in PodIPPoolAnnouncements.
+			for _, cidr := range tt.updatedAdvertised {
+				found := false
+				for _, advrt := range testSC.PodIPPoolAnnouncements {
+					if advrt.NLRI.String() == cidr.String() {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Fatalf("failed to advertise %v", cidr)
+				}
+			}
+
+			// Ensure PodIPPoolAnnouncements does not contain advertisements
+			// not in updated ipam pools.
+			for _, advrt := range testSC.PodIPPoolAnnouncements {
+				var found bool
+				for _, cidr := range tt.updatedAdvertised {
+					if advrt.NLRI.String() == cidr.String() {
+						found = true
+					}
+				}
+				if !found {
+					t.Fatalf("unwanted advertisement %+v", advrt)
+				}
+			}
+		})
+	}
+}
+
 func TestLBServiceReconciler(t *testing.T) {
 	blueSelector := slim_metav1.LabelSelector{MatchLabels: map[string]string{"color": "blue"}}
 	redSelector := slim_metav1.LabelSelector{MatchLabels: map[string]string{"color": "red"}}

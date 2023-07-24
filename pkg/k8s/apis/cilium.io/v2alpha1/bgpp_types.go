@@ -199,6 +199,15 @@ type CiliumBGPVirtualRouter struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default=false
 	ExportPodCIDR *bool `json:"exportPodCIDR,omitempty"`
+	// PodIPPoolSelector selects CIDRs for advertising when multi-pool IPAM is enabled.
+	// The key is a pool name of the local node and the value is a comma-separated
+	// list of allocated pool CIDRs to announce. A PodIPPoolSelector with an unspecified
+	// value will match all CIDRs of the pool.
+	//
+	// If unspecified, no multi-pool IPAM CIDRs will be advertised.
+	//
+	// +kubebuilder:validation:Optional
+	PodIPPoolSelector *slimv1.LabelSelector `json:"podIPPoolSelector,omitempty"`
 	// ServiceSelector selects a group of load balancer services which this
 	// virtual router will announce. The loadBalancerClass for a service must
 	// be nil or specify a class supported by Cilium, e.g. "io.cilium/bgp-control-plane".

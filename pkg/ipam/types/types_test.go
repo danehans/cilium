@@ -5,6 +5,7 @@ package types
 
 import (
 	"net"
+	"net/netip"
 	"testing"
 
 	check "github.com/cilium/checkmate"
@@ -175,4 +176,50 @@ func (e *TypesSuite) TestFirstSubnetWithAvailableAddresses(c *check.C) {
 	subnetID, addresses = sm.FirstSubnetWithAvailableAddresses([]PoolID{"s0", "s1"})
 	c.Assert(subnetID, check.Equals, PoolID("s1"))
 	c.Assert(addresses, check.Equals, 10)
+}
+
+func (e *TypesSuite) TestToPrefix(c *check.C) {
+	var tests = []struct {
+		name   string
+		cidr   IPAMPodCIDR
+		prefix netip.Prefix
+		expect bool
+	}{
+		{
+			name:   "Nil IPAM CIDR",
+			expect: false,
+		},
+		{
+			name:   "IPv4 IPAM CIDR",
+			cidr:   "1.2.3.0/24",
+			prefix: netip.MustParsePrefix("1.2.3.0/24"),
+			expect: true,
+		},
+		{
+			name:   "IPv6 IPAM CIDR",
+			cidr:   "2001:DB8::/32",
+			prefix: netip.MustParsePrefix("2001:DB8::/32"),
+			expect: true,
+		},
+		{
+			name:   "Invalid IPv4 IPAM CIDR",
+			cidr:   "1.2.x.0/24",
+			expect: false,
+		},
+		{
+			name:   "Invalid IPv6 IPAM CIDR",
+			cidr:   "2001:DBx::/32",
+			expect: false,
+		},
+	}
+
+	for _, test := range tests {
+		got, err := test.cidr.ToPrefix()
+		if test.expect {
+			c.Assert(err, check.IsNil)
+			c.Assert(*got, checker.Equals, test.prefix)
+		} else {
+			c.Assert(err, check.NotNil)
+		}
+	}
 }

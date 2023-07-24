@@ -6,6 +6,7 @@ package types
 import (
 	"encoding/json"
 	"net"
+	"net/netip"
 	"path"
 	"strings"
 
@@ -35,10 +36,10 @@ func (nn Identity) String() string {
 	return path.Join(nn.Cluster, nn.Name)
 }
 
-// appendAllocCDIR sets or appends the given podCIDR to the node.
+// appendAllocCIDR sets or appends the given podCIDR to the node.
 // If the IPv4/IPv6AllocCIDR is already set, we add the podCIDR as a secondary
 // alloc CIDR.
-func (n *Node) appendAllocCDIR(podCIDR *cidr.CIDR) {
+func (n *Node) appendAllocCIDR(podCIDR *cidr.CIDR) {
 	if podCIDR.IP.To4() != nil {
 		if n.IPv4AllocCIDR == nil {
 			n.IPv4AllocCIDR = podCIDR
@@ -51,6 +52,22 @@ func (n *Node) appendAllocCDIR(podCIDR *cidr.CIDR) {
 		} else {
 			n.IPv6SecondaryAllocCIDRs = append(n.IPv6SecondaryAllocCIDRs, podCIDR)
 		}
+	}
+}
+
+// appendIPAMPools appends the pool and valid cidrs to the AllocIPAMPools of n.
+func (n *Node) appendIPAMPools(pool string, cidrs []ipamTypes.IPAMPodCIDR) {
+	var prefixes []netip.Prefix
+	for _, cidr := range cidrs {
+		if p, err := cidr.ToPrefix(); err == nil {
+			prefixes = append(prefixes, *p)
+		}
+	}
+	if prefixes != nil {
+		if n.IPAMAllocPools == nil {
+			n.IPAMAllocPools = make(map[string][]netip.Prefix)
+		}
+		n.IPAMAllocPools[pool] = prefixes
 	}
 }
 
@@ -73,7 +90,7 @@ func ParseCiliumNode(n *ciliumv2.CiliumNode) (node Node) {
 	for _, cidrString := range n.Spec.IPAM.PodCIDRs {
 		ipnet, err := cidr.ParseCIDR(cidrString)
 		if err == nil {
-			node.appendAllocCDIR(ipnet)
+			node.appendAllocCIDR(ipnet)
 		}
 	}
 
@@ -81,9 +98,14 @@ func ParseCiliumNode(n *ciliumv2.CiliumNode) (node Node) {
 		for _, podCIDR := range pool.CIDRs {
 			ipnet, err := cidr.ParseCIDR(string(podCIDR))
 			if err == nil {
-				node.appendAllocCDIR(ipnet)
+				node.appendAllocCIDR(ipnet)
 			}
 		}
+	}
+
+	pools := n.AllocatedIPAMPools()
+	for _, pool := range pools {
+		node.appendIPAMPools(pool.Pool, pool.CIDRs)
 	}
 
 	node.IPv4HealthIP = net.ParseIP(n.Spec.HealthAddressing.IPv4)
@@ -122,6 +144,7 @@ func (n *Node) GetCiliumAnnotations() map[string]string {
 func (n *Node) ToCiliumNode() *ciliumv2.CiliumNode {
 	var (
 		podCIDRs                 []string
+		ipamPools                []ipamTypes.IPAMPoolAllocation
 		ipAddrs                  []ciliumv2.NodeAddress
 		healthIPv4, healthIPv6   string
 		ingressIPv4, ingressIPv6 string
@@ -152,6 +175,16 @@ func (n *Node) ToCiliumNode() *ciliumv2.CiliumNode {
 		ingressIPv6 = n.IPv6IngressIP.String()
 	}
 
+	if n.IPAMAllocPools != nil {
+		for pool, cidrs := range n.IPAMAllocPools {
+			var ipamCIDRs []ipamTypes.IPAMPodCIDR
+			for _, c := range cidrs {
+				ipamCIDRs = append(ipamCIDRs, ipamTypes.IPAMPodCIDR(c.String()))
+			}
+			ipamPools = append(ipamPools, ipamTypes.IPAMPoolAllocation{Pool: pool, CIDRs: ipamCIDRs})
+		}
+	}
+
 	for _, address := range n.IPAddresses {
 		ipAddrs = append(ipAddrs, ciliumv2.NodeAddress{
 			Type: address.Type,
@@ -159,7 +192,7 @@ func (n *Node) ToCiliumNode() *ciliumv2.CiliumNode {
 		})
 	}
 
-	return &ciliumv2.CiliumNode{
+	ret := &ciliumv2.CiliumNode{
 		ObjectMeta: v1.ObjectMeta{
 			Name:        n.Name,
 			Labels:      n.Labels,
@@ -184,6 +217,12 @@ func (n *Node) ToCiliumNode() *ciliumv2.CiliumNode {
 			NodeIdentity: uint64(n.NodeIdentity),
 		},
 	}
+
+	if ipamPools != nil {
+		ret.Spec.IPAM.Pools = ipamTypes.IPAMPoolSpec{Allocated: ipamPools}
+	}
+
+	return ret
 }
 
 // RegisterNode overloads GetKeyName to ignore the cluster name, as cluster name may not be stable during node registration.
@@ -230,6 +269,10 @@ type Node struct {
 	// IPv6SecondaryAllocCIDRs contains additional IPv6 CIDRs from which this
 	// node allocates IPs for its local endpoints from
 	IPv6SecondaryAllocCIDRs []*cidr.CIDR
+
+	// IPAMAllocPools ia a map of IPAM pools allocated from the local CiliumNode
+	// keyed by the pool name.
+	IPAMAllocPools map[string][]netip.Prefix
 
 	// IPv4HealthIP if not nil, this is the IPv4 address of the
 	// cilium-health endpoint located on the node.
@@ -613,6 +656,13 @@ func (n *Node) GetIPv6AllocCIDRs() []*cidr.CIDR {
 		result = append(result, n.IPv6SecondaryAllocCIDRs...)
 	}
 	return result
+}
+
+func (n *Node) GetIPAMAllocPools() map[string][]netip.Prefix {
+	if n != nil && n.IPAMAllocPools != nil {
+		return n.IPAMAllocPools
+	}
+	return nil
 }
 
 // GetKeyNodeName constructs the API name for the given cluster and node name.

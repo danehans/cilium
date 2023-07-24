@@ -15,6 +15,7 @@ import (
 
 	eniTypes "github.com/cilium/cilium/pkg/aws/eni/types"
 	"github.com/cilium/cilium/pkg/checker"
+	ipamTypes "github.com/cilium/cilium/pkg/ipam/types"
 	k8sConst "github.com/cilium/cilium/pkg/k8s/apis/cilium.io"
 	k8sUtils "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/utils"
 	slim_metav1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/meta/v1"
@@ -537,6 +538,25 @@ func (s *CiliumV2Suite) TestCiliumNodeInstanceID(c *C) {
 	c.Assert((&CiliumNode{Spec: NodeSpec{InstanceID: "foo"}}).InstanceID(), Equals, "foo")
 	c.Assert((&CiliumNode{Spec: NodeSpec{InstanceID: "foo", ENI: eniTypes.ENISpec{InstanceID: "bar"}}}).InstanceID(), Equals, "foo")
 	c.Assert((&CiliumNode{Spec: NodeSpec{ENI: eniTypes.ENISpec{InstanceID: "bar"}}}).InstanceID(), Equals, "bar")
+}
+
+func (s *CiliumV2Suite) TestCiliumNodeAllocIPAMPools(c *C) {
+	c.Assert((*CiliumNode)(nil).AllocatedIPAMPools(), IsNil)
+	c.Assert((&CiliumNode{}).AllocatedIPAMPools(), IsNil)
+	c.Assert((&CiliumNode{Spec: NodeSpec{IPAM: ipamTypes.IPAMSpec{Pools: ipamTypes.IPAMPoolSpec{}}}}).AllocatedIPAMPools(), IsNil)
+	poolSpec := ipamTypes.IPAMPoolSpec{
+		Allocated: []ipamTypes.IPAMPoolAllocation{
+			{
+				Pool:  "test1",
+				CIDRs: []ipamTypes.IPAMPodCIDR{"1.2.3.0/24", "2.3.4.0/24"},
+			},
+			{
+				Pool:  "test2",
+				CIDRs: []ipamTypes.IPAMPodCIDR{"2001:DB8::/32", "2001:DB9::/32"},
+			},
+		},
+	}
+	c.Assert((&CiliumNode{Spec: NodeSpec{IPAM: ipamTypes.IPAMSpec{Pools: poolSpec}}}).AllocatedIPAMPools(), DeepEquals, poolSpec.Allocated)
 }
 
 func BenchmarkSpecEquals(b *testing.B) {

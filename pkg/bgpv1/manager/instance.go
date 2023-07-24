@@ -33,6 +33,9 @@ type ServerWithConfig struct {
 	// Holds any announced PodCIDR routes.
 	PodCIDRAnnouncements []*types.Path
 
+	// Holds any announced multi-pool IPAM CIDRs.
+	PodIPPoolAnnouncements []*types.Path
+
 	// Holds any announced Service routes.
 	ServiceAnnouncements map[resource.Key][]*types.Path
 }
@@ -52,9 +55,10 @@ func NewServerWithConfig(ctx context.Context, params types.ServerParameters) (*S
 	}
 
 	return &ServerWithConfig{
-		Server:               s,
-		Config:               nil,
-		PodCIDRAnnouncements: []*types.Path{},
-		ServiceAnnouncements: make(map[resource.Key][]*types.Path),
+		Server:                 s,
+		Config:                 nil,
+		PodCIDRAnnouncements:   []*types.Path{},
+		PodIPPoolAnnouncements: []*types.Path{},
+		ServiceAnnouncements:   make(map[resource.Key][]*types.Path),
 	}, nil
 }

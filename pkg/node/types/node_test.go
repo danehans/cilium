@@ -5,6 +5,7 @@ package types
 
 import (
 	"net"
+	"net/netip"
 	"testing"
 
 	. "github.com/cilium/checkmate"
@@ -141,6 +142,18 @@ func (s *NodeSuite) TestParseCiliumNode(c *C) {
 					"10.20.0.0/16",
 					"c0fe::/96",
 				},
+				Pools: ipamTypes.IPAMPoolSpec{
+					Allocated: []ipamTypes.IPAMPoolAllocation{
+						{
+							Pool:  "test1",
+							CIDRs: []ipamTypes.IPAMPodCIDR{"10.30.0.0/16"},
+						},
+						{
+							Pool:  "test2",
+							CIDRs: []ipamTypes.IPAMPodCIDR{"10.40.0.0/16"},
+						},
+					},
+				},
 			},
 			HealthAddressing: ciliumv2.HealthAddressingSpec{
 				IPv4: "1.1.1.1",
@@ -155,6 +168,20 @@ func (s *NodeSuite) TestParseCiliumNode(c *C) {
 	}
 
 	n := ParseCiliumNode(nodeResource)
+
+	ipv4SecCIDRs := []*cidr.CIDR{cidr.MustParseCIDR("10.20.0.0/16")}
+	var expectPools = make(map[string][]netip.Prefix)
+	for _, allocation := range nodeResource.Spec.IPAM.Pools.Allocated {
+		var prefixes []netip.Prefix
+		for _, c := range allocation.CIDRs {
+			ipv4SecCIDRs = append(ipv4SecCIDRs, cidr.MustParseCIDR(string(c)))
+			if p, err := c.ToPrefix(); err == nil {
+				prefixes = append(prefixes, *p)
+			}
+		}
+		expectPools[allocation.Pool] = prefixes
+
+	}
 	c.Assert(n, checker.DeepEquals, Node{
 		Name:   "foo",
 		Source: source.CustomResource,
@@ -165,9 +192,10 @@ func (s *NodeSuite) TestParseCiliumNode(c *C) {
 			{Type: addressing.NodeExternalIP, IP: net.ParseIP("c0de::2")},
 		},
 		EncryptionKey:           uint8(10),
+		IPAMAllocPools:          expectPools,
 		IPv4AllocCIDR:           cidr.MustParseCIDR("10.10.0.0/16"),
 		IPv6AllocCIDR:           cidr.MustParseCIDR("c0de::/96"),
-		IPv4SecondaryAllocCIDRs: []*cidr.CIDR{cidr.MustParseCIDR("10.20.0.0/16")},
+		IPv4SecondaryAllocCIDRs: ipv4SecCIDRs,
 		IPv6SecondaryAllocCIDRs: []*cidr.CIDR{cidr.MustParseCIDR("c0fe::/96")},
 		IPv4HealthIP:            net.ParseIP("1.1.1.1"),
 		IPv6HealthIP:            net.ParseIP("c0de::1"),
@@ -192,6 +220,7 @@ func (s *NodeSuite) TestNode_ToCiliumNode(c *C) {
 		IPv6AllocCIDR:           cidr.MustParseCIDR("c0de::/96"),
 		IPv4SecondaryAllocCIDRs: []*cidr.CIDR{cidr.MustParseCIDR("10.20.0.0/16")},
 		IPv6SecondaryAllocCIDRs: []*cidr.CIDR{cidr.MustParseCIDR("c0fe::/96")},
+		IPAMAllocPools:          map[string][]netip.Prefix{"test1": {netip.MustParsePrefix("1.2.3.0/24")}},
 		IPv4HealthIP:            net.ParseIP("1.1.1.1"),
 		IPv6HealthIP:            net.ParseIP("c0de::1"),
 		IPv4IngressIP:           net.ParseIP("1.1.1.2"),
@@ -229,6 +258,14 @@ func (s *NodeSuite) TestNode_ToCiliumNode(c *C) {
 					"c0de::/96",
 					"10.20.0.0/16",
 					"c0fe::/96",
+				},
+				Pools: ipamTypes.IPAMPoolSpec{
+					Allocated: []ipamTypes.IPAMPoolAllocation{
+						{
+							Pool:  "test1",
+							CIDRs: []ipamTypes.IPAMPodCIDR{"1.2.3.0/24"},
+						},
+					},
 				},
 			},
 			HealthAddressing: ciliumv2.HealthAddressingSpec{
