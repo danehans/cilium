@@ -4,10 +4,13 @@
 package v2alpha1
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
 	"k8s.io/utils/pointer"
+
+	v1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/meta/v1"
 )
 
 func TestBGPPeeringPolicyDefaulting(t *testing.T) {
@@ -138,6 +141,65 @@ func TestBGPNeighborValidation(t *testing.T) {
 			err := step.neighbor.Validate()
 			if (step.expectError == nil) != (err == nil) {
 				t.Fatalf("incorrect validation result - want: %v, got: %v", step.expectError, err)
+			}
+		})
+	}
+}
+
+func TestBGPVirtualRouterValidation(t *testing.T) {
+	var tests = []struct {
+		name   string
+		router *CiliumBGPVirtualRouter
+		err    error
+	}{
+		{
+			name: "nil ip pool selector",
+			router: &CiliumBGPVirtualRouter{
+				LocalASN:          1234,
+				Neighbors:         []CiliumBGPNeighbor{},
+				PodIPPoolSelector: nil,
+			},
+			err: nil,
+		},
+		{
+			name: "empty ip pool selector",
+			router: &CiliumBGPVirtualRouter{
+				LocalASN:  1234,
+				Neighbors: []CiliumBGPNeighbor{},
+				PodIPPoolSelector: &v1.LabelSelector{
+					MatchLabels: map[string]string{},
+				},
+			},
+			err: nil,
+		},
+		{
+			name: "ip pool selector with valid prefixes",
+			router: &CiliumBGPVirtualRouter{
+				LocalASN:  1234,
+				Neighbors: []CiliumBGPNeighbor{},
+				PodIPPoolSelector: &v1.LabelSelector{
+					MatchLabels: map[string]string{"test1": "1.2.3.4/16", "test2": "2001:db8::/32"},
+				},
+			},
+			err: nil,
+		},
+		{
+			name: "ip pool selector with invalid prefix",
+			router: &CiliumBGPVirtualRouter{
+				LocalASN:  1234,
+				Neighbors: []CiliumBGPNeighbor{},
+				PodIPPoolSelector: &v1.LabelSelector{
+					MatchLabels: map[string]string{"test1": "1.2.3.4.16", "test2": "2001:db8::/32"},
+				},
+			},
+			err: errors.New(""),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.router.Validate()
+			if (test.err == nil) != (err == nil) {
+				t.Fatalf("incorrect validation result - want: %v, got: %v", test.err, err)
 			}
 		})
 	}

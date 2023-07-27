@@ -334,6 +334,9 @@ func (c *Controller) FullWithdrawal(ctx context.Context) {
 // this validates only those constraints that cannot be enforced by them.
 func (c *Controller) validatePolicy(policy *v2alpha1api.CiliumBGPPeeringPolicy) error {
 	for _, r := range policy.Spec.VirtualRouters {
+		if err := r.Validate(); err != nil {
+			return err
+		}
 		for _, n := range r.Neighbors {
 			if err := n.Validate(); err != nil {
 				return err

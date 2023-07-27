@@ -5,6 +5,8 @@ package v2alpha1
 
 import (
 	"fmt"
+	"net/netip"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/pointer"
@@ -283,6 +285,26 @@ func (n *CiliumBGPNeighbor) SetDefaults() {
 			},
 		}
 	}
+}
+
+// Validate validates CiliumBGPVirtualRouter's configuration constraints
+// that can not be expressed using the kubebuilder validation markers.
+func (r *CiliumBGPVirtualRouter) Validate() error {
+	if r.PodIPPoolSelector != nil {
+		for _, cidrs := range r.PodIPPoolSelector.MatchLabels {
+			// An empty string represents match all CIDRs for IPAM pool.
+			if cidrs == "" {
+				continue
+			}
+			prefixes := strings.Split(cidrs, ",")
+			for _, p := range prefixes {
+				if _, err := netip.ParsePrefix(p); err != nil {
+					return fmt.Errorf("failed to parse prefix %s: %w", p, err)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // Validate validates CiliumBGPNeighbor's configuration constraints

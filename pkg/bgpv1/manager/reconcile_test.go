@@ -642,7 +642,7 @@ func TestPodIPPoolReconciler(t *testing.T) {
 			},
 		},
 		{
-			name: "remove one cidr from one ipam pool",
+			name: "remove one of two cidrs from one ipam pool",
 			pools: map[string][]netip.Prefix{
 				"test1": {netip.MustParsePrefix("192.168.0.0/24"), netip.MustParsePrefix("192.168.1.0/24")},
 			},
@@ -651,7 +651,6 @@ func TestPodIPPoolReconciler(t *testing.T) {
 			},
 			advertised: []netip.Prefix{
 				netip.MustParsePrefix("192.168.0.0/24"),
-				//netip.MustParsePrefix("192.168.3.0/24"),
 			},
 			updatedSelector: &slim_metav1.LabelSelector{
 				MatchLabels: map[string]string{"test1": "192.168.1.0/24"},
