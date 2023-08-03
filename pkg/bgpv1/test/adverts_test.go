@@ -5,11 +5,11 @@ package test
 
 import (
 	"context"
+	"net/netip"
 	"testing"
 	"time"
 
 	"github.com/cilium/cilium/pkg/cidr"
-	slim_metav1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/meta/v1"
 	slimv1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/meta/v1"
 	"github.com/cilium/cilium/pkg/node"
 	"github.com/cilium/cilium/pkg/testutils"
@@ -174,6 +174,144 @@ func Test_PodCIDRAdvert(t *testing.T) {
 	}
 }
 
+// Test_IPAMPoolAdvert validates IPv4/v6 ipam pools are advertised on CiliumNode changes.
+func Test_IPAMPoolAdvert(t *testing.T) {
+	testutils.PrivilegedTest(t)
+
+	node.SetTestLocalNodeStore()
+	defer node.UnsetTestLocalNodeStore()
+
+	// steps define order in which test is run. Note, this is different from table tests, in which each unit is
+	// independent. In this case, tests are run sequentially and there is dependency on previous test step.
+	var steps = []struct {
+		description string
+		ipamPools   map[string][]netip.Prefix
+		policyPools map[string]string
+		expected    []routeEvent
+	}{
+		{
+			description: "advertise no cidrs from one ipam pool",
+			ipamPools: map[string][]netip.Prefix{
+				"pool1": {netip.MustParsePrefix("10.1.2.0/24"), netip.MustParsePrefix("10.1.3.0/24")},
+			},
+			policyPools: map[string]string{"pool1": "10.1.4.0/24"},
+			expected:    nil,
+		},
+		{
+			description: "advertise all cidrs from one ipam pool",
+			ipamPools: map[string][]netip.Prefix{
+				"pool1": {netip.MustParsePrefix("10.2.2.0/24"), netip.MustParsePrefix("10.2.3.0/24")},
+			},
+			policyPools: map[string]string{"pool1": ""},
+			expected: []routeEvent{
+				{
+					sourceASN:   ciliumASN,
+					prefix:      "10.2.2.0",
+					prefixLen:   24,
+					isWithdrawn: false,
+				},
+				{
+					sourceASN:   ciliumASN,
+					prefix:      "10.2.3.0",
+					prefixLen:   24,
+					isWithdrawn: false,
+				},
+			},
+		},
+		{
+			description: "advertise two cidrs from two ipam pools",
+			ipamPools: map[string][]netip.Prefix{
+				"pool1": {
+					netip.MustParsePrefix("10.3.3.0/24"),
+					netip.MustParsePrefix("10.3.4.0/24"),
+					netip.MustParsePrefix("10.3.5.0/24"),
+				},
+				"pool2": {
+					netip.MustParsePrefix("10.3.6.0/24"),
+					netip.MustParsePrefix("10.3.7.0/24"),
+					netip.MustParsePrefix("10.3.8.0/24"),
+				},
+			},
+			policyPools: map[string]string{"pool1": "10.3.3.0/24,10.3.5.0/24", "pool2": "10.3.6.0/24,10.3.8.0/24"},
+			expected: []routeEvent{
+				{
+					sourceASN:   ciliumASN,
+					prefix:      "10.3.3.0",
+					prefixLen:   24,
+					isWithdrawn: false,
+				},
+				{
+					sourceASN:   ciliumASN,
+					prefix:      "10.3.5.0",
+					prefixLen:   24,
+					isWithdrawn: false,
+				},
+				{
+					sourceASN:   ciliumASN,
+					prefix:      "10.3.6.0",
+					prefixLen:   24,
+					isWithdrawn: false,
+				},
+				{
+					sourceASN:   ciliumASN,
+					prefix:      "10.3.8.0",
+					prefixLen:   24,
+					isWithdrawn: false,
+				},
+			},
+		},
+		{
+			description: "advertise no cidrs from one ipam pool",
+			ipamPools: map[string][]netip.Prefix{
+				"pool1": {netip.MustParsePrefix("10.1.2.0/24"), netip.MustParsePrefix("10.1.3.0/24")},
+			},
+			policyPools: map[string]string{"pool1": "10.1.4.0/24"},
+			expected:    nil,
+		},
+	}
+
+	testCtx, testDone := context.WithTimeout(context.Background(), maxTestDuration)
+	defer testDone()
+
+	// setup topology
+	gobgpPeers, fixture, cleanup, err := setup(testCtx, []gobgpConfig{gobgpConf}, fixtureConf)
+	require.NoError(t, err)
+	require.Len(t, gobgpPeers, 1)
+	defer cleanup()
+
+	// setup neighbor
+	err = setupSingleNeighbor(testCtx, fixture)
+	require.NoError(t, err)
+
+	// wait for peering to come up
+	err = gobgpPeers[0].waitForSessionState(testCtx, []string{"ESTABLISHED"})
+	require.NoError(t, err)
+
+	for _, step := range steps {
+		t.Run(step.description, func(t *testing.T) {
+			// update local node store
+			//updated := *fixture
+			fixture.nodeStore.Update(func(n *node.LocalNode) {
+				n.IPAMAllocPools = step.ipamPools
+			})
+
+			// setup bgp policy with ipam pool selection
+			fixture.config.policy.Spec.VirtualRouters[0].PodIPPoolSelector = &slimv1.LabelSelector{
+				MatchLabels: step.policyPools,
+			}
+			_, err = fixture.policyClient.Update(testCtx, &fixture.config.policy, meta_v1.UpdateOptions{})
+			require.NoError(t, err)
+
+			// validate expected result
+			receivedEvents, err := gobgpPeers[0].getRouteEvents(testCtx, len(step.expected))
+			require.NoError(t, err, step.description)
+
+			// match events in any order
+			require.ElementsMatch(t, step.expected, receivedEvents, step.description)
+		})
+	}
+}
+
 // Test_LBEgressAdvertisement validates Service v4 and v6 IPs is advertised, withdrawn and modified on changing policy.
 func Test_LBEgressAdvertisement(t *testing.T) {
 	testutils.PrivilegedTest(t)
@@ -332,8 +470,8 @@ func Test_LBEgressAdvertisement(t *testing.T) {
 	require.NoError(t, err)
 
 	// setup bgp policy with service selection
-	fixture.config.policy.Spec.VirtualRouters[0].ServiceSelector = &slim_metav1.LabelSelector{
-		MatchExpressions: []slim_metav1.LabelSelectorRequirement{
+	fixture.config.policy.Spec.VirtualRouters[0].ServiceSelector = &slimv1.LabelSelector{
+		MatchExpressions: []slimv1.LabelSelectorRequirement{
 			// always true match
 			{
 				Key:      "somekey",
