@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cilium/cilium/pkg/cidr"
+	v2alpha1api "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2alpha1"
 	slimv1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/meta/v1"
 	"github.com/cilium/cilium/pkg/node"
 	"github.com/cilium/cilium/pkg/testutils"
@@ -296,7 +297,7 @@ func Test_IPAMPoolAdvert(t *testing.T) {
 			})
 
 			// setup bgp policy with ipam pool selection
-			fixture.config.policy.Spec.VirtualRouters[0].PodIPPoolSelector = &slimv1.LabelSelector{
+			fixture.config.policy.Spec.VirtualRouters[0].PodIPPoolSelector = &v2alpha1api.IPPoolLabelSelector{
 				MatchLabels: step.policyPools,
 			}
 			_, err = fixture.policyClient.Update(testCtx, &fixture.config.policy, meta_v1.UpdateOptions{})

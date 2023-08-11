@@ -186,6 +186,14 @@ type CiliumBGPNeighbor struct {
 	Families []CiliumBGPFamily `json:"families"`
 }
 
+type IPPoolLabelSelector struct {
+	// matchLabels is a map of {key,value} pairs, where the value is one or more
+	// comma-separated valid IP addresses.
+	//
+	// +kubebuilder:validation:Optional
+	MatchLabels map[string]string `json:"matchLabels,omitempty" protobuf:"bytes,1,rep,name=matchLabels"`
+}
+
 // CiliumBGPVirtualRouter defines a discrete BGP virtual router configuration.
 type CiliumBGPVirtualRouter struct {
 	// LocalASN is the ASN of this virtual router.
@@ -209,7 +217,7 @@ type CiliumBGPVirtualRouter struct {
 	// If unspecified, no multi-pool IPAM CIDRs will be advertised.
 	//
 	// +kubebuilder:validation:Optional
-	PodIPPoolSelector *slimv1.LabelSelector `json:"podIPPoolSelector,omitempty"`
+	PodIPPoolSelector *IPPoolLabelSelector `json:"podIPPoolSelector,omitempty"`
 	// ServiceSelector selects a group of load balancer services which this
 	// virtual router will announce. The loadBalancerClass for a service must
 	// be nil or specify a class supported by Cilium, e.g. "io.cilium/bgp-control-plane".

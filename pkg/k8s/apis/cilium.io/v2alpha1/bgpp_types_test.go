@@ -9,8 +9,6 @@ import (
 	"testing"
 
 	"k8s.io/utils/pointer"
-
-	v1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/meta/v1"
 )
 
 func TestBGPPeeringPolicyDefaulting(t *testing.T) {
@@ -166,7 +164,7 @@ func TestBGPVirtualRouterValidation(t *testing.T) {
 			router: &CiliumBGPVirtualRouter{
 				LocalASN:  1234,
 				Neighbors: []CiliumBGPNeighbor{},
-				PodIPPoolSelector: &v1.LabelSelector{
+				PodIPPoolSelector: &IPPoolLabelSelector{
 					MatchLabels: map[string]string{},
 				},
 			},
@@ -177,7 +175,7 @@ func TestBGPVirtualRouterValidation(t *testing.T) {
 			router: &CiliumBGPVirtualRouter{
 				LocalASN:  1234,
 				Neighbors: []CiliumBGPNeighbor{},
-				PodIPPoolSelector: &v1.LabelSelector{
+				PodIPPoolSelector: &IPPoolLabelSelector{
 					MatchLabels: map[string]string{"test1": "1.2.3.4/16", "test2": "2001:db8::/32"},
 				},
 			},
@@ -188,7 +186,7 @@ func TestBGPVirtualRouterValidation(t *testing.T) {
 			router: &CiliumBGPVirtualRouter{
 				LocalASN:  1234,
 				Neighbors: []CiliumBGPNeighbor{},
-				PodIPPoolSelector: &v1.LabelSelector{
+				PodIPPoolSelector: &IPPoolLabelSelector{
 					MatchLabels: map[string]string{"test1": "1.2.3.4.16", "test2": "2001:db8::/32"},
 				},
 			},

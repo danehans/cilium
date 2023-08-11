@@ -572,11 +572,11 @@ func TestPodIPPoolReconciler(t *testing.T) {
 		// The multi-pool ipam cidrs allocated to the local node, keyed by pool name.
 		pools map[string][]netip.Prefix
 		// The initial selector used by the BGP policy for matching multi-pool ipam cidrs.
-		initSelector *slim_metav1.LabelSelector
+		initSelector *v2alpha1api.IPPoolLabelSelector
 		// The advertised multi-pool ipam cidrs the test begins with.
 		advertised []netip.Prefix
 		// The selector used by the updated BGP policy for matching multi-pool ipam cidrs.
-		updatedSelector *slim_metav1.LabelSelector
+		updatedSelector *v2alpha1api.IPPoolLabelSelector
 		// The advertised multi-pool ipam cirs the test ends with.
 		updatedAdvertised []netip.Prefix
 	}{
@@ -591,11 +591,11 @@ func TestPodIPPoolReconciler(t *testing.T) {
 			pools: map[string][]netip.Prefix{
 				"test1": {netip.MustParsePrefix("192.168.0.0/24"), netip.MustParsePrefix("192.168.1.0/24")},
 			},
-			initSelector: &slim_metav1.LabelSelector{
+			initSelector: &v2alpha1api.IPPoolLabelSelector{
 				MatchLabels: map[string]string{"test1": "192.168.3.0/24"},
 			},
 			advertised: nil,
-			updatedSelector: &slim_metav1.LabelSelector{
+			updatedSelector: &v2alpha1api.IPPoolLabelSelector{
 				MatchLabels: map[string]string{"test1": "192.168.4.0/24,192.168.5.0/24"},
 			},
 			updatedAdvertised: nil,
@@ -605,13 +605,13 @@ func TestPodIPPoolReconciler(t *testing.T) {
 			pools: map[string][]netip.Prefix{
 				"test1": {netip.MustParsePrefix("192.168.0.0/24"), netip.MustParsePrefix("192.168.1.0/24")},
 			},
-			initSelector: &slim_metav1.LabelSelector{
+			initSelector: &v2alpha1api.IPPoolLabelSelector{
 				MatchLabels: map[string]string{"test1": "192.168.0.0/24"},
 			},
 			advertised: []netip.Prefix{
 				netip.MustParsePrefix("192.168.0.0/24"),
 			},
-			updatedSelector: &slim_metav1.LabelSelector{
+			updatedSelector: &v2alpha1api.IPPoolLabelSelector{
 				MatchLabels: map[string]string{"test1": "192.168.0.0/24,192.168.3.0/24"},
 			},
 			updatedAdvertised: []netip.Prefix{
@@ -624,14 +624,14 @@ func TestPodIPPoolReconciler(t *testing.T) {
 				"test1": {netip.MustParsePrefix("192.168.0.0/24"), netip.MustParsePrefix("192.168.1.0/24"), netip.MustParsePrefix("192.168.3.0/24")},
 				"test2": {netip.MustParsePrefix("192.168.4.0/24"), netip.MustParsePrefix("192.168.5.0/24"), netip.MustParsePrefix("192.168.6.0/24")},
 			},
-			initSelector: &slim_metav1.LabelSelector{
+			initSelector: &v2alpha1api.IPPoolLabelSelector{
 				MatchLabels: map[string]string{"test1": "192.168.0.0/24", "test2": "192.168.4.0/24"},
 			},
 			advertised: []netip.Prefix{
 				netip.MustParsePrefix("192.168.0.0/24"),
 				netip.MustParsePrefix("192.168.2.0/24"),
 			},
-			updatedSelector: &slim_metav1.LabelSelector{
+			updatedSelector: &v2alpha1api.IPPoolLabelSelector{
 				MatchLabels: map[string]string{"test1": "192.168.0.0/24,192.168.3.0/24", "test2": "192.168.4.0/24,192.168.6.0/24"},
 			},
 			updatedAdvertised: []netip.Prefix{
@@ -646,13 +646,13 @@ func TestPodIPPoolReconciler(t *testing.T) {
 			pools: map[string][]netip.Prefix{
 				"test1": {netip.MustParsePrefix("192.168.0.0/24"), netip.MustParsePrefix("192.168.1.0/24")},
 			},
-			initSelector: &slim_metav1.LabelSelector{
+			initSelector: &v2alpha1api.IPPoolLabelSelector{
 				MatchLabels: map[string]string{"test1": "192.168.0.0/24,192.168.3.0/24"},
 			},
 			advertised: []netip.Prefix{
 				netip.MustParsePrefix("192.168.0.0/24"),
 			},
-			updatedSelector: &slim_metav1.LabelSelector{
+			updatedSelector: &v2alpha1api.IPPoolLabelSelector{
 				MatchLabels: map[string]string{"test1": "192.168.1.0/24"},
 			},
 			updatedAdvertised: []netip.Prefix{
@@ -664,13 +664,13 @@ func TestPodIPPoolReconciler(t *testing.T) {
 			pools: map[string][]netip.Prefix{
 				"test1": {netip.MustParsePrefix("192.168.0.0/24"), netip.MustParsePrefix("192.168.1.0/24")},
 			},
-			initSelector: &slim_metav1.LabelSelector{
+			initSelector: &v2alpha1api.IPPoolLabelSelector{
 				MatchLabels: map[string]string{"test1": "192.168.0.0/24"},
 			},
 			advertised: []netip.Prefix{
 				netip.MustParsePrefix("192.168.0.0/24"),
 			},
-			updatedSelector: &slim_metav1.LabelSelector{
+			updatedSelector: &v2alpha1api.IPPoolLabelSelector{
 				MatchLabels: map[string]string{"test1": ""},
 			},
 			updatedAdvertised: []netip.Prefix{
@@ -683,13 +683,13 @@ func TestPodIPPoolReconciler(t *testing.T) {
 			pools: map[string][]netip.Prefix{
 				"test1": {netip.MustParsePrefix("192.168.0.0/24"), netip.MustParsePrefix("192.168.1.0/24")},
 			},
-			initSelector: &slim_metav1.LabelSelector{
+			initSelector: &v2alpha1api.IPPoolLabelSelector{
 				MatchLabels: map[string]string{"test1": "192.168.0.0/24"},
 			},
 			advertised: []netip.Prefix{
 				netip.MustParsePrefix("192.168.0.0/24"),
 			},
-			updatedSelector: &slim_metav1.LabelSelector{
+			updatedSelector: &v2alpha1api.IPPoolLabelSelector{
 				MatchLabels: map[string]string{"test1": "192.168.0.0/24,192.168.x.0/24"},
 			},
 			updatedAdvertised: []netip.Prefix{
