@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -354,6 +355,17 @@ func GetHostMasqueradeIPv4() net.IP {
 func SetIPv4AllocRange(net *cidr.CIDR) {
 	localNode.Update(func(n *LocalNode) {
 		n.IPv4AllocCIDR = net
+	})
+}
+
+// SetIPAMAllocPool sets the IPAM allocation pool for the provided name and cidrs
+// to use for the local node.
+func SetIPAMAllocPool(name string, cidrs []netip.Prefix) {
+	localNode.Update(func(n *LocalNode) {
+		if n.IPAMAllocPools == nil {
+			n.IPAMAllocPools = make(map[string][]netip.Prefix)
+		}
+		n.IPAMAllocPools[name] = cidrs
 	})
 }
 

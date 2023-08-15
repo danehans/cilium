@@ -402,14 +402,9 @@ func (r *PodIPPoolReconciler) Priority() int {
 	return 50
 }
 
-func (r *PodIPPoolReconciler) Reconcile(ctx context.Context, params ReconcileParams) error {
-	return podIPPoolReconciler(ctx, params)
-}
-
-// podIPPoolReconciler is a ConfigReconcilerFunc which reconciles the advertisement
-// of multi-pool IPAM CIDRs from the local CiliumNode resource.
-func podIPPoolReconciler(ctx context.Context, p ReconcileParams) error {
-
+// Reconcile reconciles the advertisement of multi-pool IPAM CIDRs from the local
+// CiliumNode resource.
+func (r *PodIPPoolReconciler) Reconcile(ctx context.Context, p ReconcileParams) error {
 	l := log.WithFields(
 		logrus.Fields{
 			"component": "manager.podIPPoolReconciler",
@@ -417,76 +412,64 @@ func podIPPoolReconciler(ctx context.Context, p ReconcileParams) error {
 	)
 
 	if p.DesiredConfig == nil {
-		return fmt.Errorf("attempted pod CIDR pool advertisements reconciliation with nil CiliumBGPPeeringPolicy")
+		return fmt.Errorf("attempted pod IPAM pool advertisements reconciliation with nil CiliumBGPPeeringPolicy")
 	}
 	if p.CurrentServer == nil {
-		return fmt.Errorf("attempted pod CIDR pool advertisements reconciliation with nil ServerWithConfig")
+		return fmt.Errorf("attempted pod IPAM pool advertisements reconciliation with nil ServerWithConfig")
 	}
 	if p.Node == nil {
-		return fmt.Errorf("attempted pod CIDR pool advertisements reconciliation with nil LocalNode")
+		return fmt.Errorf("attempted pod IPAM pool advertisements reconciliation with nil LocalNode")
 	}
 
-	var existingSelector *slim_metav1.LabelSelector
-	if p.CurrentServer.Config != nil && p.CurrentServer.Config.PodIPPoolSelector != nil {
-		existingSelector = p.CurrentServer.Config.PodIPPoolSelector
-	}
-
-	// If the existing selector was updated, went from nil to something or something to nil, we need to perform full
-	// reconciliation and check if every existing announcement's IPAM pool CIDR still matches the selector.
-	changed := (existingSelector != nil && p.DesiredConfig.PodIPPoolSelector != nil && !p.DesiredConfig.PodIPPoolSelector.DeepEqual(existingSelector)) ||
-		((existingSelector == nil) != (p.DesiredConfig.PodIPPoolSelector == nil))
-
-	if changed {
-		toAdvertise := []*types.Path{}
-		for pool, poolCIDRs := range p.Node.GetIPAMAllocPools() {
-			if p.DesiredConfig.PodIPPoolSelector != nil {
-				if selectorCIDRs, ok := p.DesiredConfig.PodIPPoolSelector.MatchLabels[pool]; ok {
-					if selectorCIDRs == "" {
-						// Advertise all CIDRs for pool.
-						for _, cidr := range poolCIDRs {
-							path := types.NewPathForPrefix(cidr)
-							toAdvertise = append(toAdvertise, path)
+	toAdvertise := []*types.Path{}
+	for pool, poolCIDRs := range p.Node.IPAMAllocPools {
+		if p.DesiredConfig.PodIPPoolSelector != nil {
+			if selectorCIDRs, ok := p.DesiredConfig.PodIPPoolSelector.MatchLabels[pool]; ok {
+				if selectorCIDRs == "" {
+					// Advertise all CIDRs for pool.
+					for _, cidr := range poolCIDRs {
+						path := types.NewPathForPrefix(cidr)
+						toAdvertise = append(toAdvertise, path)
+					}
+				} else {
+					// Only advertise pool CIDRs that match selector.
+					splitCIDRs := strings.Split(selectorCIDRs, ",")
+					for _, cidr := range splitCIDRs {
+						parsedCIDR, err := netip.ParsePrefix(strings.TrimSpace(cidr))
+						if err != nil {
+							l.Errorf("failed to parse prefix %q: %v", cidr, err)
+							continue
 						}
-					} else {
-						// Only advertise pool CIDRs that match selector.
-						splitCIDRs := strings.Split(selectorCIDRs, ",")
-						for _, cidr := range splitCIDRs {
-							parsedCIDR, err := netip.ParsePrefix(strings.TrimSpace(cidr))
-							if err != nil {
-								l.Errorf("failed to parse prefix %q: %v", cidr, err)
-								continue
-							}
-							for _, c := range poolCIDRs {
-								if c == parsedCIDR {
-									path := types.NewPathForPrefix(c)
-									toAdvertise = append(toAdvertise, path)
-								}
+						for _, c := range poolCIDRs {
+							if c == parsedCIDR {
+								path := types.NewPathForPrefix(c)
+								toAdvertise = append(toAdvertise, path)
 							}
 						}
 					}
 				}
 			}
 		}
-		advertisements, err := exportAdvertisementsReconciler(&advertisementsReconcilerParams{
-			ctx:       ctx,
-			name:      "ipam pool cidrs",
-			component: "manager.podIPPoolReconciler",
-			enabled:   true,
-
-			sc:   p.CurrentServer,
-			newc: p.DesiredConfig,
-
-			currentAdvertisements: p.CurrentServer.PodIPPoolAnnouncements,
-			toAdvertise:           toAdvertise,
-		})
-		if err != nil {
-			return err
-		}
-
-		// Update the server config's list of current advertisements only if the
-		// reconciliation logic didn't return any error.
-		p.CurrentServer.PodIPPoolAnnouncements = advertisements
 	}
+	advertisements, err := exportAdvertisementsReconciler(&advertisementsReconcilerParams{
+		ctx:       ctx,
+		name:      "ipam pool cidrs",
+		component: "manager.podIPPoolReconciler",
+		enabled:   true,
+
+		sc:   p.CurrentServer,
+		newc: p.DesiredConfig,
+
+		currentAdvertisements: p.CurrentServer.PodIPPoolAnnouncements,
+		toAdvertise:           toAdvertise,
+	})
+	if err != nil {
+		return err
+	}
+
+	// Update the server config's list of current advertisements only if the
+	// reconciliation logic didn't return any error.
+	p.CurrentServer.PodIPPoolAnnouncements = advertisements
 
 	return nil
 }

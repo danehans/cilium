@@ -64,7 +64,9 @@ func retrieveNodeInformation(ctx context.Context, nodeGetter k8sGetter, nodeName
 	mightAutoDetectDevices := option.MightAutoDetectDevices()
 	var n *nodeTypes.Node
 
-	if option.Config.IPAM == ipamOption.IPAMClusterPool || option.Config.IPAM == ipamOption.IPAMClusterPoolV2 {
+	if option.Config.IPAM == ipamOption.IPAMClusterPool ||
+		option.Config.IPAM == ipamOption.IPAMClusterPoolV2 ||
+		option.Config.IPAM == ipamOption.IPAMMultiPool {
 		ciliumNode, err := nodeGetter.GetCiliumNode(ctx, nodeName)
 		if err != nil {
 			// If no CIDR is required, retrieving the node information is
@@ -152,6 +154,11 @@ func WaitForNodeInformation(ctx context.Context, k8sGetter k8sGetter) error {
 			logfields.V6Prefix:         n.IPv6AllocCIDR,
 			logfields.K8sNodeIP:        k8sNodeIP,
 		}).Info("Received own node information from API server")
+
+		pools := n.GetIPAMAllocPools()
+		for pool, cidrs := range pools {
+			node.SetIPAMAllocPool(pool, cidrs)
+		}
 
 		useNodeCIDR(n)
 
