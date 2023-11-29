@@ -23,6 +23,8 @@ import (
 	"github.com/cilium/cilium/pkg/option"
 )
 
+const pseudoHeaderLength = 40
+
 // This is the required size of the OOB buffer to pass to ReadMsgUDP.
 var udpOOBSize = func() int {
 	var hdr unix.Cmsghdr
@@ -233,6 +235,8 @@ func (s *sessionUDP) WriteResponse(b []byte) (int, error) {
 		IP: s.raddr.IP,
 	}
 	if s.raddr.IP.To4() == nil {
+		csum, _ := computeIPv6Checksum(s.laddr.IP, s.raddr.IP, s.laddr.Port, s.raddr.Port, buf)
+		binary.BigEndian.PutUint16(buf[6:8], csum) // FIXME may not be the best way to resign the csum
 		n, _, err = rawconn6.WriteMsgIP(buf, s.controlMessage(s.laddr), &dst)
 	} else {
 		n, _, err = rawconn4.WriteMsgIP(buf, s.controlMessage(s.laddr), &dst)
@@ -307,4 +311,45 @@ func (s *sessionUDP) controlMessage(src *net.UDPAddr) []byte {
 	cm := new(ipv4.ControlMessage)
 	cm.Src = src.IP
 	return cm.Marshal()
+}
+
+func computeChecksum(packet []byte) uint16 {
+	length := len(packet)
+	sum := uint32(0)
+
+	// Add the pseudo-header
+	for i := 0; i < pseudoHeaderLength; i += 2 {
+			sum += uint32(binary.BigEndian.Uint16(packet[i : i+2]))
+	}
+	// Add the UDP header and payload
+	for i := pseudoHeaderLength; i < length; i += 2 {
+			sum += uint32(binary.BigEndian.Uint16(packet[i : i+2]))
+	}
+	// Fold 32-bit sum to 16 bits
+	for sum > 0xFFFF {
+			sum = (sum >> 16) + (sum & 0xFFFF)
+	}
+	// Take the one's complement
+	checksum := ^uint16(sum)
+	return checksum
+}
+
+func genIPv6PseudoHeader(srcIP net.IP, dstIP net.IP, udpHeaderWithPayload []byte) []byte {
+	header := make([]byte, pseudoHeaderLength)
+	// Src Address
+	copy(header[0:], srcIP)
+	// Destination Address
+	copy(header[16:], dstIP)
+	// Payload Length (set to UDP header length + payload length)
+	binary.BigEndian.PutUint32(header[32:36], uint32(len(udpHeaderWithPayload)))
+	// Next Header (UDP)
+	header[39] = 0x11
+	return header
+}
+
+func computeIPv6Checksum(srcIP, dstIP net.IP, srcPort, dstPort int, udpHeaderWithPayload []byte) (uint16, error) {
+	pseudoHeader := genIPv6PseudoHeader(srcIP, dstIP, udpHeaderWithPayload)
+	packet := append(pseudoHeader, udpHeaderWithPayload...)
+	checksum := computeChecksum(packet)
+	return checksum, nil
 }
